@@ -769,7 +769,9 @@ def process_remove_admin(message):
         bot.send_message(message.chat.id, f"❌ حدث خطأ: {e}")
 
 # ============ مسار Webhook (ضعه قبل التشغيل فقط) ============
+app = Flask(__name__)
 @app.route("/webhook", methods=["POST"])
+
 def webhook():
     if request.headers.get("content-type") == "application/json":
         json_str = request.get_data().decode("utf-8")
