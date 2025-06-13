@@ -788,7 +788,7 @@ if __name__ == "__main__":
     bot.remove_webhook()
 
     # تعيين Webhook الجديد (تأكد من أنك وضعت رابط Replit الصحيح هنا)
-    bot.set_webhook(url="https://your-replit-name.your-username.repl.co/webhook")
+    bot.set_webhook(url="https://zil.onrender.com/webhook")
 
     # تشغيل خادم Flask (يبقي البوت يعمل عبر Webhook)
     app.run(host="0.0.0.0", port=8080)
