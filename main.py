@@ -768,10 +768,16 @@ def process_remove_admin(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ حدث خطأ: {e}")
 
-# ============ مسار Webhook (ضعه قبل التشغيل فقط) ============
+# ============ تهيئة Flask ============
 app = Flask(__name__)
-@app.route("/webhook", methods=["POST"])
 
+# ============ مسار الجذر ============
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ البوت يعمل على Render!", 200
+
+# ============ مسار Webhook ============
+@app.route("/webhook", methods=["POST"])
 def webhook():
     if request.headers.get("content-type") == "application/json":
         json_str = request.get_data().decode("utf-8")
@@ -784,11 +790,7 @@ def webhook():
 if __name__ == "__main__":
     show_hacker_banner()
 
-    # إزالة Webhook السابق (اختياري)
     bot.remove_webhook()
-
-    # تعيين Webhook الجديد (تأكد من أنك وضعت رابط Replit الصحيح هنا)
     bot.set_webhook(url="https://zil.onrender.com/webhook")
 
-    # تشغيل خادم Flask (يبقي البوت يعمل عبر Webhook)
     app.run(host="0.0.0.0", port=8080)
