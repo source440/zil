@@ -16,7 +16,7 @@ import time
 import telebot
 
 # ============ الإعدادات الأساسية ============
-TOKEN = '7987463096:AAHv121UW_Gb1SbYiT4gs67pe6upucdmRpI'  # توكن البوت
+TOKEN = '8174533216:AAGRk_LpwW2pWLkAUas4sigfjP2pSDp49q4'  # توكن البوت
 ADMIN_ID = 7384683084  # معرف الأدمن الأساسي
 channel = ''  # قناة الاشتراك الإجباري
 developer_channel = channel  # قناة المطور
