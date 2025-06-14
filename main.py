@@ -2,40 +2,22 @@
 #BLACK
 #@Y_U_U_X
 ###############
-
 import sys
 import os
 import subprocess
 import zipfile
 import tempfile
 import shutil
+import requests
 import re
 import importlib
-import time
-
-# تثبيت مكتبة إذا لم تكن موجودة
-def ensure_module_installed(module_name, install_name=None):
-    try:
-        importlib.import_module(module_name)
-    except ImportError:
-        print(f"📦 جاري تثبيت المكتبة: {module_name} ...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", install_name or module_name])
-
-# تثبيت المكتبات المطلوبة تلقائيًا
-ensure_module_installed("requests")
-ensure_module_installed("telebot", "pyTelegramBotAPI")
-ensure_module_installed("flask")
-
-# بعد التأكد من التثبيت، نبدأ الاستيراد الكامل
-import requests
-import telebot
 from telebot import types
-from flask import Flask, request
+import time
+import telebot
 
 # ============ الإعدادات الأساسية ============
 TOKEN = '7987463096:AAHv121UW_Gb1SbYiT4gs67pe6upucdmRpI'  # توكن البوت
 ADMIN_ID = 7384683084  # معرف الأدمن الأساسي
-
 channel = ''  # قناة الاشتراك الإجباري
 developer_channel = channel  # قناة المطور
 
@@ -768,29 +750,7 @@ def process_remove_admin(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ حدث خطأ: {e}")
 
-# ============ تهيئة Flask ============
-app = Flask(__name__)
-
-# ============ مسار الجذر ============
-@app.route("/", methods=["GET"])
-def home():
-    return "✅ البوت يعمل على Render!", 200
-
-# ============ مسار Webhook ============
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    if request.headers.get("content-type") == "application/json":
-        json_str = request.get_data().decode("utf-8")
-        update = telebot.types.Update.de_json(json_str)
-        bot.process_new_updates([update])
-        return "OK", 200
-    return "Unsupported Media Type", 415
-
 # ============ بدء التشغيل ============
 if __name__ == "__main__":
     show_hacker_banner()
-
-    bot.remove_webhook()
-    bot.set_webhook(url="https://zil.onrender.com/webhook")
-
-    app.run(host="0.0.0.0", port=8080)
+    bot.infinity_polling()
