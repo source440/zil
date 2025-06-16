@@ -17,7 +17,7 @@ import tempfile
 from collections import defaultdict
 
 # استبدال القيم بقراءة متغيرات البيئة
-TOKEN = os.environ.get('TELEGRAM_TOKEN')
+TOKEN = os.environ.get('7987463096:AAHvEk0BHRW2ZWcnwAp2ui0CKY7ww9-Q33k')
 admin_id = int(os.environ.get('ADMIN_ID', '7384683084'))  # آيدي المطور
 
 bot = telebot.TeleBot(TOKEN)
