@@ -1127,7 +1127,7 @@ def run_bot():
     print("🚀 Bot is running...")
     bot.remove_webhook()
     time.sleep(1)
-    bot.set_webhook(url=os.environ.get('WEBHOOK_URL') + '/webhook')
+    bot.set_webhook(url=os.environ.get('https://zil.onrender.com') + '/webhook')
 
 if __name__ == "__main__":
     # بدء البوت في خيط منفصل
