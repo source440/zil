@@ -15,16 +15,21 @@ import threading
 import requests
 from collections import defaultdict
 import io
+from flask import Flask, request  # ✅ أضفنا Flask
 
+# إعداد التوكن وإنشاء البوت وFlask app
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
-admin_id = int(os.getenv('ADMIN_ID', '7384683084'))  # آيدي المطور من متغير البيئة
+app = Flask(__name__)  # ✅ تطبيق Flask
+
+# آيدي المطور من متغير البيئة
+admin_id = int(os.getenv('ADMIN_ID', '7384683084'))
 
 # تخزين العمليات والملفات
 user_files = {}  # {chat_id: {file_key: {'process': Popen, 'content': bytes, 'file_name': str, 'temp_path': str}}}
 banned_users = set()
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-MAX_MEMORY_USAGE = 300 * 1024 * 1024  # 300MB كحد أقصى لاستخدام الذاكرة
+MAX_MEMORY_USAGE = 300 * 1024 * 1024  # 300MB كحد أقصى لاستخدام الذاكرةكحد أقصى لاستخدام الذاكرة
 
 # تخزين بيانات الأدمن
 admin_users = {admin_id}  # مجموعة من آيدي الأدمن
@@ -1117,24 +1122,36 @@ def back_to_main(call):
         text=start_message,
         reply_markup=markup
     )
+# نقطة النهاية التي تستقبل التحديثات من Telegram
+@app.route(f"/{TOKEN}", methods=['POST'])
+def webhook():
+    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "OK", 200
 
-# وظيفة للحفاظ على الخدمة نشطة على Render
+# نقطة للتأكد أن الخدمة تعمل (لأغراض keep_alive)
+@app.route("/keepalive", methods=["GET"])
+def keepalive():
+    return "I am alive!", 200
+
+# وظيفة للحفاظ على الخدمة نشطة (اختياري في حال استخدمته في أماكن ثانية)
 def keep_alive():
     while True:
         try:
-            # استبدل الرابط برابط تطبيقك على Render
-            requests.get("https://zil-1.onrender.com/keepalive")
+            requests.get("https://zil-1.onrender.com/keepalive")  # ✅ تأكد أن الرابط هو رابط تطبيقك على Render
             time.sleep(300)  # كل 5 دقائق
         except:
             pass
 
-# بدء البوت
+# بدء التطبيق
 if __name__ == "__main__":
-    # بدء خيط للحفاظ على الخدمة نشطة
-    t = threading.Thread(target=keep_alive)
-    t.daemon = True
-    t.start()
-    
+    # إعداد Webhook
+    bot.remove_webhook()
+    bot.set_webhook(url=f"https://zil-1.onrender.com/{TOKEN}")  # ✅ عدّل الرابط حسب رابط تطبيقك
+
     load_data()  # تحميل البيانات المحفوظة
-    print("🚀 Bot is running...")
-    bot.polling()
+
+    print("🚀 Bot is running with Webhook...")
+
+    # تشغيل تطبيق Flask على المنفذ المطلوب
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
