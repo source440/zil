@@ -95,7 +95,7 @@ def get_welcome_message(user_name):
     now = datetime.datetime.now()
     current_time = now.strftime("%H:%M")
     return f"""
-مرحباً، {user_name} | الوقت: {current_time}⏐! 👋
+مرحباً، {user_name} |! 👋
 أهلاً بك في بوت رفع واستضافة بوتات بايثون!
 
 🎯 مهمة البوت:
@@ -103,7 +103,7 @@ def get_welcome_message(user_name):
 
 🚀 كيفية الاستخدام:
 1. استخدم الأزرار للتنقل.
-2. ارفع ملفك مع الالتزام بالشروط
+2. للأطلاع على المزيد من معلومات البوت اضغط على المساعدة
 """
 
 def install_requirements(path):
@@ -1112,7 +1112,7 @@ def back_to_main(call):
     # أزرار المساعدة والمطور في نفس السطر
     help_dev_buttons = [
         types.InlineKeyboardButton("المساعدة ❓", callback_data='help'),
-        types.InlineKeyboardButton("المطور 👨‍💻", url="https://t.me/SSUU_R")
+        types.InlineKeyboardButton("المطور 👨‍💻", url="https://t.me/TT_1_TT")
     ]
     markup.add(*help_dev_buttons)
     
