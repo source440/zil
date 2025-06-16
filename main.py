@@ -215,7 +215,7 @@ def start(message):
     # أزرار المساعدة والمطور في نفس السطر
     help_dev_buttons = [
         types.InlineKeyboardButton("المساعدة ❓", callback_data='help'),
-        types.InlineKeyboardButton("المطور 👨‍💻", url="https://t.me/SSUU_R")
+        types.InlineKeyboardButton("المطور 👨‍💻", url="https://t.me/TT_1_TT")
     ]
     markup.add(*help_dev_buttons)
     
