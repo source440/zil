@@ -1,7 +1,10 @@
 import telebot
+import os
+import threading
+from flask import Flask, request
+import telebot
 from telebot import types
 import subprocess
-import os
 import re
 import zipfile
 import uuid
@@ -13,9 +16,12 @@ import sys
 import tempfile
 from collections import defaultdict
 
-TOKEN = '7987463096:AAHvEk0BHRW2ZWcnwAp2ui0CKY7ww9-Q33k'
+# استبدال القيم بقراءة متغيرات البيئة
+TOKEN = os.environ.get('TELEGRAM_TOKEN')
+admin_id = int(os.environ.get('ADMIN_ID', '7384683084'))  # آيدي المطور
+
 bot = telebot.TeleBot(TOKEN)
-admin_id = 7384683084  # ضع هنا آيدي المطور
+
 
 # تخزين العمليات والملفات
 user_files = {}  # {chat_id: {file_key: {'process': Popen, 'file_path': str, 'file_name': str}}}
@@ -1096,12 +1102,38 @@ def back_to_main(call):
         reply_markup=markup
     )
 
-# بدء البوت
-if __name__ == "__main__":
+# ======= تعديلات Render ========
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    return 'Bad request', 400
+
+def run_bot():
     # إنشاء المجلدات اللازمة
     os.makedirs("venvs", exist_ok=True)
     os.makedirs("uploads", exist_ok=True)
     
     load_data()  # تحميل البيانات المحفوظة
     print("🚀 Bot is running...")
-    bot.polling()
+    bot.remove_webhook()
+    time.sleep(1)
+    bot.set_webhook(url=os.environ.get('WEBHOOK_URL') + '/webhook')
+
+if __name__ == "__main__":
+    # بدء البوت في خيط منفصل
+    t = threading.Thread(target=run_bot)
+    t.start()
+    
+    # بدء خادم Flask
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
