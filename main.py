@@ -269,7 +269,7 @@ def admin_panel(message):
         types.InlineKeyboardButton("✅ إلغاء الحظر", callback_data='admin_unban_user'),
         types.InlineKeyboardButton("🗂️ قائمة المحظورين", callback_data='admin_banned_list'),
         types.InlineKeyboardButton("🧪 اختبار بوت مستخدم", callback_data='admin_test_user_bot'),
-        types.InlineKeyboardButton("🔁 إعادة تشغيل بوت مستخدم", callback_data='admin_restart_user_bot'),
+        types.InlineKeyboardButton("🔁 إعادة ��شغيل بوت مستخدم", callback_data='admin_restart_user_bot'),
         types.InlineKeyboardButton("❌ إيقاف بوت مستخدم", callback_data='admin_stop_user_bot'),
         types.InlineKeyboardButton("🔄 إعادة تشغيل كل البوتات", callback_data='admin_restart_all'),
         types.InlineKeyboardButton("📦 عرض ملفات مستخدم", callback_data='admin_view_user_files'),
@@ -315,7 +315,7 @@ def handle_admin_callback(call):
         bot.register_next_step_handler(msg, process_ban_user)
     
     elif data == 'admin_unban_user':
-        msg = bot.send_message(chat_id, "أرسل آيدي المستخدم الذي تريد إلغاء حظره:")
+        msg = bot.send_message(chat_id, "أرسل آيدي المستخدم الذي ��ريد إلغاء حظره:")
         bot.register_next_step_handler(msg, process_unban_user)
     
     elif data == 'admin_banned_list':
@@ -565,6 +565,8 @@ def process_delete_user_file(message):
                 # حذف الملف المؤقت إن وجد
                 if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
                     os.unlink(file_info['temp_path'])
+                if 'temp_dir' in file_info and os.path.exists(file_info['temp_dir']):
+                    shutil.rmtree(file_info['temp_dir'], ignore_errors=True)
                 
                 # حذف المحتوى من الذاكرة
                 file_size = len(file_info['content'])
@@ -838,30 +840,92 @@ def approve_file(call):
     # تخزين المحتوى في الذاكرة
     if user_id not in user_files:
         user_files[user_id] = {}
+    
+    response = ""
+    proc = None
+    
+    try:
+        if file_name.endswith(".py"):
+            user_files[user_id][file_key] = {
+                'file_name': file_name,
+                'content': file_data,
+                'process': None
+            }
+            
+            # تحديث إحصائيات الذاكرة
+            user_stats['memory_usage'] += len(file_data)
+            
+            # إنشاء ملف مؤقت للتشغيل
+            temp_path = create_temp_file(file_data, '.py')
+            user_files[user_id][file_key]['temp_path'] = temp_path
+            
+            # تثبيت المتطلبات
+            install_requirements(temp_path)
+            
+            # تشغيل الملف
+            proc = subprocess.Popen(["python3", temp_path])
+            user_files[user_id][file_key]['process'] = proc
+            
+            response = f"✅ تم قبول و تشغيل ملفك `{file_name}` بنجاح."
+            
+        elif file_name.endswith(".zip"):
+            # إنشاء مجلد مؤقت لفك الضغط
+            temp_dir = tempfile.mkdtemp()
+            zip_path = os.path.join(temp_dir, file_name)
+            with open(zip_path, 'wb') as f:
+                f.write(file_data)
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+            
+            # البحث عن ملفات البايثون الرئيسية
+            py_files = [f for f in os.listdir(temp_dir) if f.endswith('.py')]
+            main_file = None
+            
+            # محاولة العثور على ملف رئيسي
+            for candidate in ['main.py', 'bot.py', 'start.py', 'app.py']:
+                if candidate in py_files:
+                    main_file = os.path.join(temp_dir, candidate)
+                    break
+            
+            # إذا لم يتم العثور، استخدام أول ملف بايثون
+            if not main_file and py_files:
+                main_file = os.path.join(temp_dir, py_files[0])
+            
+            if main_file:
+                # قراءة محتوى الملف الرئيسي
+                with open(main_file, 'rb') as f:
+                    main_content = f.read()
+                
+                user_files[user_id][file_key] = {
+                    'file_name': os.path.basename(main_file),
+                    'content': main_content,
+                    'process': None,
+                    'temp_dir': temp_dir  # تخزين المسار لحذفه لاحقاً
+                }
+                
+                # تحديث إحصائيات الذاكرة
+                user_stats['memory_usage'] += len(main_content)
+                
+                # تثبيت المتطلبات
+                install_requirements(main_file)
+                
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", main_file])
+                user_files[user_id][file_key]['process'] = proc
+                
+                response = f"✅ تم قبول و تشغيل الملف الرئيسي `{os.path.basename(main_file)}` من الأرشيف بنجاح."
+            else:
+                response = f"✅ تم قبول الملف المضغوط `{file_name}`.\n\n⚠️ لم يتم العثور على ملف بايثون رئيسي للتشغيل"
+        else:
+            response = f"❌ صيغة غير مدعومة: {file_name}"
         
-    user_files[user_id][file_key] = {
-        'file_name': file_name,
-        'content': file_data,
-        'process': None
-    }
-    
-    # تحديث إحصائيات الذاكرة
-    user_stats['memory_usage'] += len(file_data)
-    
-    # إنشاء ملف مؤقت للتشغيل
-    temp_path = create_temp_file(file_data, '.py')
-    user_files[user_id][file_key]['temp_path'] = temp_path
-    
-    # تثبيت المتطلبات
-    install_requirements(temp_path)
-    
-    # تشغيل الملف
-    proc = subprocess.Popen(["python3", temp_path])
-    user_files[user_id][file_key]['process'] = proc
-    
-    # تسجيل النشاط
-    user_stats['total_files'] += 1
-    log_activity(user_id, "موافقة على ملف", f"ملف: {file_name}")
+        # تسجيل النشاط
+        user_stats['total_files'] += 1
+        log_activity(user_id, "موافقة على ملف", f"ملف: {file_name}")
+        
+    except Exception as e:
+        response = f"❌ فشل في معالجة الملف `{file_name}`: {str(e)}"
     
     # إرسال إشعار للمستخدم
     try:
@@ -876,7 +940,7 @@ def approve_file(call):
         bot.edit_message_text(
             chat_id=user_id,
             message_id=original_msg_id,
-            text=f"✅ تم قبول و تشغيل ملفك `{file_name}` بنجاح.",
+            text=response,
             parse_mode="Markdown",
             reply_markup=markup
         )
@@ -884,12 +948,12 @@ def approve_file(call):
         # في حالة حذف المستخدم للرسالة الأصلية
         bot.send_message(
             user_id,
-            f"✅ تم قبول و تشغيل ملفك `{file_name}` بنجاح.",
+            response,
             parse_mode="Markdown"
         )
     
     # إرسال إشعار للأدمن
-    bot.answer_callback_query(call.id, f"✅ تم قبول الملف وتشغيله للمستخدم {user_id}")
+    bot.answer_callback_query(call.id, f"✅ تم قبول الملف للمستخدم {user_id}")
     bot.send_message(call.message.chat.id, f"✅ تم قبول ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reject_'))
@@ -946,7 +1010,7 @@ def handle_file(message):
         bot.edit_message_text(
             chat_id=waiting_msg.chat.id,
             message_id=waiting_msg.message_id,
-            text=f"⚠️ الملف `{file_name}` يتجاوز الحجم المسموح ({MAX_FILE_SIZE//(1024*1024)}MB)."
+            text=f"⚠️ الملف `{file_name}` يت��اوز الحجم المسموح ({MAX_FILE_SIZE//(1024*1024)}MB)."
         )
         return
     
