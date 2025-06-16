@@ -11,16 +11,20 @@ import json
 import shutil
 import sys
 import tempfile
+import threading
+import requests
 from collections import defaultdict
+import io
 
-TOKEN = '7987463096:AAHvEk0BHRW2ZWcnwAp2ui0CKY7ww9-Q33k'
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
-admin_id = 7384683084  # ضع هنا آيدي المطور
+admin_id = int(os.getenv('ADMIN_ID', '7384683084'))  # آيدي المطور من متغير البيئة
 
 # تخزين العمليات والملفات
-user_files = {}  # {chat_id: {file_key: {'process': Popen, 'file_path': str, 'file_name': str}}}
+user_files = {}  # {chat_id: {file_key: {'process': Popen, 'content': bytes, 'file_name': str, 'temp_path': str}}}
 banned_users = set()
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_MEMORY_USAGE = 300 * 1024 * 1024  # 300MB كحد أقصى لاستخدام الذاكرة
 
 # تخزين بيانات الأدمن
 admin_users = {admin_id}  # مجموعة من آيدي الأدمن
@@ -30,7 +34,8 @@ user_stats = {  # إحصائيات البوت
     'total_users': 0,
     'total_files': 0,
     'running_bots': 0,
-    'command_usage': defaultdict(int)
+    'command_usage': defaultdict(int),
+    'memory_usage': 0
 }
 bot_locked = False  # حالة قفل البوت
 live_monitoring = False  # حالة المراقبة المباشرة
@@ -155,22 +160,25 @@ def install_requirements(path):
     except Exception as e:
         print(f"فشل التثبيت التلقائي: {e}")
 
-def create_virtual_environment(env_path):
-    """إنشاء بيئة افتراضية جديدة"""
-    try:
-        os.makedirs(env_path, exist_ok=True)
-        subprocess.call([sys.executable, '-m', 'venv', env_path])
-        return True
-    except Exception as e:
-        print(f"فشل إنشاء البيئة الافتراضية: {e}")
-        return False
+def get_memory_usage():
+    """الحصول على إجمالي استخدام الذاكرة للملفات"""
+    total = 0
+    for user_id, files in user_files.items():
+        for file_key, file_info in files.items():
+            if 'content' in file_info:
+                total += len(file_info['content'])
+    return total
 
-def get_virtualenv_python(env_path):
-    """الحصول على مسار بايثون في البيئة الافتراضية"""
-    if sys.platform == 'win32':
-        return os.path.join(env_path, 'Scripts', 'python.exe')
-    else:
-        return os.path.join(env_path, 'bin', 'python')
+def check_memory_available(additional_size):
+    """التحقق من توفر مساحة ذاكرة كافية"""
+    current_usage = get_memory_usage()
+    return (current_usage + additional_size) <= MAX_MEMORY_USAGE
+
+def create_temp_file(content, suffix=''):
+    """إنشاء ملف مؤقت وإرجاع مساره"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+        temp_file.write(content)
+        return temp_file.name
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -230,6 +238,7 @@ def show_help(call):
   • سيتم البحث عن ملف رئيسي (main.py, bot.py, ...)
   • سيتم تثبيت المكتبات من ملف requirements.txt تلقائيًا
 - الحد الأقصى لحجم الملف: 100MB
+- الملفات تحفظ مؤقتًا في الذاكرة وتُحذف عند التوقف
 
 📦 مثال لملف requirements.txt:
 telebot
@@ -418,7 +427,12 @@ def process_test_user_bot(message):
                 if file_info['process'] and file_info['process'].poll() is None:
                     file_info['process'].terminate()
                 
-                proc = subprocess.Popen(["python3", file_info['file_path']])
+                # إنشاء ملف مؤقت
+                temp_path = create_temp_file(file_info['content'], '.py')
+                file_info['temp_path'] = temp_path
+                
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", temp_path])
                 file_info['process'] = proc
         
         bot.reply_to(message, f"✅ تم اختبار وإعادة تشغيل بوتات المستخدم {user_id}")
@@ -441,7 +455,12 @@ def process_restart_user_bot(message):
                     file_info['process'].terminate()
                     time.sleep(1)
                 
-                proc = subprocess.Popen(["python3", file_info['file_path']])
+                # إنشاء ملف مؤقت
+                temp_path = create_temp_file(file_info['content'], '.py')
+                file_info['temp_path'] = temp_path
+                
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", temp_path])
                 file_info['process'] = proc
         
         bot.reply_to(message, f"✅ تم إعادة تشغيل بوتات المستخدم {user_id}")
@@ -461,6 +480,10 @@ def process_stop_user_bot(message):
         for file_key, file_info in user_files[user_id].items():
             if file_info['process'] and file_info['process'].poll() is None:
                 file_info['process'].terminate()
+                # حذف الملف المؤقت
+                if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
+                    os.unlink(file_info['temp_path'])
+                    del file_info['temp_path']
         
         bot.reply_to(message, f"✅ تم إيقاف بوتات المستخدم {user_id}")
         log_activity(message.from_user.id, "إيقاف بوت مستخدم", f"ID: {user_id}")
@@ -477,7 +500,12 @@ def restart_all_bots(chat_id):
                     file_info['process'].terminate()
                     time.sleep(1)
                 
-                proc = subprocess.Popen(["python3", file_info['file_path']])
+                # إنشاء ملف مؤقت
+                temp_path = create_temp_file(file_info['content'], '.py')
+                file_info['temp_path'] = temp_path
+                
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", temp_path])
                 file_info['process'] = proc
                 count += 1
     
@@ -525,20 +553,14 @@ def process_delete_user_file(message):
                 if file_info['process'] and file_info['process'].poll() is None:
                     file_info['process'].terminate()
                 
-                # حذف الملف
-                try:
-                    os.remove(file_info['file_path'])
-                    # حذف مجلد فك الضغط إذا كان موجوداً
-                    if 'extract_path' in file_info:
-                        shutil.rmtree(file_info['extract_path'], ignore_errors=True)
-                    # حذف البيئة الافتراضية إذا كانت موجودة
-                    if 'env_path' in file_info and file_info['env_path']:
-                        shutil.rmtree(file_info['env_path'], ignore_errors=True)
-                except:
-                    pass
+                # حذف الملف المؤقت إن وجد
+                if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
+                    os.unlink(file_info['temp_path'])
                 
-                # حذف من التخزين
+                # حذف المحتوى من الذاكرة
+                file_size = len(file_info['content'])
                 del user_files[user_id][file_key]
+                user_stats['memory_usage'] -= file_size
                 deleted = True
                 break
         
@@ -596,12 +618,16 @@ def show_activity_log(chat_id):
 
 def show_bot_settings(chat_id):
     """عرض إعدادات البوت"""
+    memory_usage_mb = get_memory_usage() / (1024 * 1024)
+    max_memory_mb = MAX_MEMORY_USAGE / (1024 * 1024)
+    
     settings = f"""
 ⚙️ *إعدادات البوت الحالية*:
 
 - 🔒 حالة القفل: {'مقفل' if bot_locked else 'مفتوح'}
 - 👁️‍🗨️ المراقبة المباشرة: {'مفعلة' if live_monitoring else 'معطلة'}
 - 📏 الحد الأقصى لحجم الملف: {MAX_FILE_SIZE // (1024*1024)} MB
+- 🧠 استخدام الذاكرة: {memory_usage_mb:.2f} MB / {max_memory_mb:.2f} MB
 - 👮 عدد الأدمن: {len(admin_users)}
 - 🚫 عدد المحظورين: {len(banned_users)}
 """
@@ -637,12 +663,16 @@ def show_stats(chat_id):
             if file_info.get('process') and file_info['process'].poll() is None:
                 running_bots += 1
     
+    memory_usage_mb = get_memory_usage() / (1024 * 1024)
+    max_memory_mb = MAX_MEMORY_USAGE / (1024 * 1024)
+    
     stats = f"""
 📊 *إحصائيات البوت*:
 
 - 👥 إجمالي المستخدمين: {user_stats['total_users']}
 - 📂 إجمالي الملفات: {user_stats['total_files']}
 - 🤖 البوتات النشطة: {running_bots}
+- 🧠 استخدام الذاكرة: {memory_usage_mb:.2f} MB / {max_memory_mb:.2f} MB
 - 📈 أكثر الأوامر استخداماً:
 """
     
@@ -736,26 +766,29 @@ def handle_file(message):
             text=f"⚠️ الملف `{file_name}` يتجاوز الحجم المسموح ({MAX_FILE_SIZE//(1024*1024)}MB)."
         )
         return
+    
+    # التحقق من توفر مساحة ذاكرة كافية
+    if not check_memory_available(file_size):
+        bot.edit_message_text(
+            chat_id=waiting_msg.chat.id,
+            message_id=waiting_msg.message_id,
+            text=f"⚠️ تجاوزت سعة الذاكرة المؤقتة، يرجى حذف بعض الملفات أو رفع ملف أصغر."
+        )
+        return
 
-    # إنشاء مجلد التحميلات
-    os.makedirs("uploads", exist_ok=True)
-    
-    # إنشاء مفتاح فريد للملف
-    file_key = str(uuid.uuid4())[:8]
-    save_path = os.path.join("uploads", file_name)
-    
     # تحميل الملف
     try:
         file_data = bot.download_file(file_info.file_path)
-        with open(save_path, "wb") as f:
-            f.write(file_data)
     except Exception as e:
         bot.edit_message_text(
             chat_id=waiting_msg.chat.id,
             message_id=waiting_msg.message_id,
-            text=f"❌ فشل في رفع الملف `{file_name}`: {str(e)}"
+            text=f"�� فشل في رفع الملف `{file_name}`: {str(e)}"
         )
         return
+
+    # إنشاء مفتاح فريد للملف
+    file_key = str(uuid.uuid4())[:8]
 
     # إنشاء الأزرار
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -767,117 +800,97 @@ def handle_file(message):
 
     # معالجة الملف
     response = ""
-    if file_name.endswith(".py"):
-        # إنشاء بيئة افتراضية للملف
-        env_path = os.path.join("venvs", f"env_{file_key}")
-        env_created = create_virtual_environment(env_path)
-        
-        # تحديث رسالة الانتظار
-        bot.edit_message_text(
-            chat_id=waiting_msg.chat.id,
-            message_id=waiting_msg.message_id,
-            text=f"🔧 جاري إعداد البيئة وتثبيت المتطلبات...",
-            parse_mode="Markdown"
-        )
-        
-        try:
-            # تثبيت المتطلبات
-            install_requirements(save_path)
-            
-            # تشغيل الملف في البيئة الافتراضية
-            if env_created:
-                python_exec = get_virtualenv_python(env_path)
-                command = [python_exec, save_path]
-            else:
-                command = ["python3", save_path]
-            
-            proc = subprocess.Popen(command)
-            
-            response = f"✅ تم تشغيل الملف `{file_name}` بنجاح."
-            if env_created:
-                response += "\n\n⚠️ تم إنشاء بيئة افتراضية خاصة للملف لتجنب تعارض المكاتب"
-            
-            # تخزين المعلومات
+    proc = None
+    
+    try:
+        if file_name.endswith(".py"):
+            # تخزين المحتوى في الذاكرة
             if message.chat.id not in user_files:
                 user_files[message.chat.id] = {}
+                
             user_files[message.chat.id][file_key] = {
-                'process': proc,
-                'file_path': save_path,
                 'file_name': file_name,
-                'env_path': env_path if env_created else None
+                'content': file_data,
+                'process': None
             }
             
-            # تسجيل النشاط
-            user_stats['total_files'] += 1
-            log_activity(message.chat.id, "رفع وتشغيل ملف", f"ملف: {file_name}")
+            # تحديث إحصائيات الذاكرة
+            user_stats['memory_usage'] += len(file_data)
             
-        except Exception as e:
-            response = f"❌ فشل في تشغيل الملف `{file_name}`:\n{str(e)}"
-        
-    elif file_name.endswith(".zip"):
-        try:
-            extract_path = os.path.join("uploads", file_name.replace('.zip', ''))
-            with zipfile.ZipFile(save_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_path)
+            # إنشاء ملف مؤقت للتشغيل
+            temp_path = create_temp_file(file_data, '.py')
+            user_files[message.chat.id][file_key]['temp_path'] = temp_path
+            
+            # تثبيت المتطلبات
+            install_requirements(temp_path)
+            
+            # تشغيل الملف
+            proc = subprocess.Popen(["python3", temp_path])
+            user_files[message.chat.id][file_key]['process'] = proc
+            
+            response = f"✅ تم تشغيل الملف `{file_name}` بنجاح."
+            
+        elif file_name.endswith(".zip"):
+            # إنشاء مجلد مؤقت لفك الضغط
+            temp_dir = tempfile.mkdtemp()
+            zip_path = os.path.join(temp_dir, file_name)
+            with open(zip_path, 'wb') as f:
+                f.write(file_data)
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
             
             # البحث عن ملفات البايثون الرئيسية
-            py_files = [f for f in os.listdir(extract_path) if f.endswith('.py')]
+            py_files = [f for f in os.listdir(temp_dir) if f.endswith('.py')]
             main_file = None
             
             # محاولة العثور على ملف رئيسي
             for candidate in ['main.py', 'bot.py', 'start.py', 'app.py']:
                 if candidate in py_files:
-                    main_file = os.path.join(extract_path, candidate)
+                    main_file = os.path.join(temp_dir, candidate)
                     break
             
             # إذا لم يتم العثور، استخدام أول ملف بايثون
             if not main_file and py_files:
-                main_file = os.path.join(extract_path, py_files[0])
+                main_file = os.path.join(temp_dir, py_files[0])
             
             if main_file:
-                # إنشاء بيئة افتراضية
-                env_path = os.path.join("venvs", f"env_{file_key}")
-                env_created = create_virtual_environment(env_path)
+                # تخزين المحتوى في الذاكرة
+                if message.chat.id not in user_files:
+                    user_files[message.chat.id] = {}
+                
+                with open(main_file, 'rb') as f:
+                    main_content = f.read()
+                
+                user_files[message.chat.id][file_key] = {
+                    'file_name': file_name,
+                    'content': main_content,
+                    'process': None,
+                    'temp_dir': temp_dir
+                }
+                
+                # تحديث إحصائيات الذاكرة
+                user_stats['memory_usage'] += len(main_content)
                 
                 # تثبيت المتطلبات
                 install_requirements(main_file)
                 
                 # تشغيل الملف
-                if env_created:
-                    python_exec = get_virtualenv_python(env_path)
-                    command = [python_exec, main_file]
-                else:
-                    command = ["python3", main_file]
-                
-                proc = subprocess.Popen(command)
+                proc = subprocess.Popen(["python3", main_file])
+                user_files[message.chat.id][file_key]['process'] = proc
                 
                 response = f"✅ تم تشغيل الملف الرئيسي `{os.path.basename(main_file)}` بنجاح."
-                if env_created:
-                    response += "\n\n⚠️ تم إنشاء بيئة افتراضية خاصة للملف لتجنب تعارض المكاتب"
-                
-                # تخزين المعلومات
-                if message.chat.id not in user_files:
-                    user_files[message.chat.id] = {}
-                user_files[message.chat.id][file_key] = {
-                    'process': proc,
-                    'file_path': save_path,
-                    'main_file': main_file,
-                    'file_name': file_name,
-                    'extract_path': extract_path,
-                    'env_path': env_path if env_created else None
-                }
             else:
-                response = f"✅ تم فك الضغط في المجلد: `{extract_path}`\n\n⚠️ لم يتم العثور على ملف بايثون رئيسي للتشغيل"
-            
-            # تسجيل النشاط
-            user_stats['total_files'] += 1
-            log_activity(message.chat.id, "رفع ملف ZIP", f"ملف: {file_name}")
-            
-        except Exception as e:
-            response = f"❌ فشل في فك ضغط أو تشغيل الملف `{file_name}`: {str(e)}"
+                response = f"✅ تم فك الضغط في المجلد المؤقت\n\n⚠️ لم يتم العثور على ملف بايثون رئيسي للتشغيل"
+        else:
+            response = "❌ صيغة غير مدعومة. استخدم .py أو .zip فقط."
         
-    else:
-        response = "❌ صيغة غير مدعومة. استخدم .py أو .zip فقط."
+        # تسجيل النشاط
+        user_stats['total_files'] += 1
+        log_activity(message.chat.id, "رفع وتشغيل ملف", f"ملف: {file_name}")
+        
+    except Exception as e:
+        response = f"❌ فشل في معالجة الملف `{file_name}`: {str(e)}"
 
     # تحديث الرسالة النهائية
     bot.edit_message_text(
@@ -903,6 +916,12 @@ def handle_callback(call):
             file_info = user_files[chat_id][file_key]
             if file_info['process'] and file_info['process'].poll() is None:
                 file_info['process'].terminate()
+                
+                # حذف الملف المؤقت
+                if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
+                    os.unlink(file_info['temp_path'])
+                    del file_info['temp_path']
+                
                 bot.answer_callback_query(call.id, f"⏹️ تم إيقاف {file_info['file_name']}")
                 # تحديث الواجهة
                 file_actions(call)
@@ -919,14 +938,12 @@ def handle_callback(call):
             file_info = user_files[chat_id][file_key]
             if file_info['process'] is None or file_info['process'].poll() is not None:
                 if file_info['file_name'].endswith('.py'):
-                    # إعادة تشغيل ملف البايثون
-                    if 'env_path' in file_info and file_info['env_path']:
-                        python_exec = get_virtualenv_python(file_info['env_path'])
-                        command = [python_exec, file_info['file_path']]
-                    else:
-                        command = ["python3", file_info['file_path']]
+                    # إنشاء ملف مؤقت جديد
+                    temp_path = create_temp_file(file_info['content'], '.py')
+                    file_info['temp_path'] = temp_path
                     
-                    proc = subprocess.Popen(command)
+                    # تشغيل الملف
+                    proc = subprocess.Popen(["python3", temp_path])
                     file_info['process'] = proc
                     bot.answer_callback_query(call.id, f"▶️ تم تشغيل {file_info['file_name']}")
                     # تحديث الواجهة
@@ -949,21 +966,20 @@ def handle_callback(call):
             if file_info['process'] and file_info['process'].poll() is None:
                 file_info['process'].terminate()
                 
-            # حذف الملف
-            try:
-                os.remove(file_info['file_path'])
-                # حذف مجلد فك الضغط إذا كان موجوداً
-                if 'extract_path' in file_info:
-                    shutil.rmtree(file_info['extract_path'], ignore_errors=True)
-                # حذف البيئة الافتراضية إذا كانت موجودة
-                if 'env_path' in file_info and file_info['env_path']:
-                    shutil.rmtree(file_info['env_path'], ignore_errors=True)
-                bot.answer_callback_query(call.id, f"🗑️ تم حذف {file_info['file_name']}")
-                # العودة لقائمة الملفات
-                show_user_files(call)
-                log_activity(chat_id, "حذف ملف", f"ملف: {file_info['file_name']}")
-            except Exception as e:
-                bot.answer_callback_query(call.id, f"❌ فشل الحذف: {str(e)}")
+            # حذف الملفات المؤقتة
+            if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
+                os.unlink(file_info['temp_path'])
+            if 'temp_dir' in file_info and os.path.exists(file_info['temp_dir']):
+                shutil.rmtree(file_info['temp_dir'], ignore_errors=True)
+                
+            # تحديث إحصائيات الذاكرة
+            if 'content' in file_info:
+                user_stats['memory_usage'] -= len(file_info['content'])
+            
+            bot.answer_callback_query(call.id, f"🗑️ تم حذف {file_info['file_name']}")
+            # العودة لقائمة الملفات
+            show_user_files(call)
+            log_activity(chat_id, "حذف ملف", f"ملف: {file_info['file_name']}")
         else:
             bot.answer_callback_query(call.id, "❌ الملف غير موجود أو تم حذفه مسبقاً.")
 
@@ -973,8 +989,13 @@ def handle_callback(call):
         if chat_id in user_files and file_key in user_files[chat_id]:
             file_info = user_files[chat_id][file_key]
             try:
-                with open(file_info['file_path'], 'rb') as file:
-                    bot.send_document(chat_id, file, caption=f"📥 {file_info['file_name']}")
+                # إرسال الملف من محتواه في الذاكرة
+                bot.send_document(
+                    chat_id, 
+                    io.BytesIO(file_info['content']), 
+                    visible_file_name=file_info['file_name'],
+                    caption=f"📥 {file_info['file_name']}"
+                )
                 bot.answer_callback_query(call.id, "✅ تم إرسال الملف")
                 log_activity(chat_id, "تنزيل ملف", f"ملف: {file_info['file_name']}")
             except Exception as e:
@@ -1039,6 +1060,7 @@ def file_actions(call):
     file_info = user_files[chat_id][file_key]
     file_name = file_info['file_name']
     status = "🟢 قيد التشغيل" if file_info['process'] and file_info['process'].poll() is None else "🔴 متوقف"
+    file_size = len(file_info.get('content', b'')) / 1024  # حجم الملف بالكيلوبايت
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     
@@ -1061,7 +1083,7 @@ def file_actions(call):
         text=f"⚙️ *تحكم في الملف*:\n"
              f"اسم الملف: `{file_name}`\n"
              f"الحالة: {status}\n"
-             f"المسار: `{file_info['file_path']}`",
+             f"الحجم: {file_size:.2f} KB",
         parse_mode="Markdown",
         reply_markup=markup
     )
@@ -1096,11 +1118,22 @@ def back_to_main(call):
         reply_markup=markup
     )
 
+# وظيفة للحفاظ على الخدمة نشطة على Render
+def keep_alive():
+    while True:
+        try:
+            # استبدل الرابط برابط تطبيقك على Render
+            requests.get("https://your-bot-name.onrender.com/keepalive")
+            time.sleep(300)  # كل 5 دقائق
+        except:
+            pass
+
 # بدء البوت
 if __name__ == "__main__":
-    # إنشاء المجلدات اللازمة
-    os.makedirs("venvs", exist_ok=True)
-    os.makedirs("uploads", exist_ok=True)
+    # بدء خيط للحفاظ على الخدمة نشطة
+    t = threading.Thread(target=keep_alive)
+    t.daemon = True
+    t.start()
     
     load_data()  # تحميل البيانات المحفوظة
     print("🚀 Bot is running...")
