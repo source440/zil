@@ -15,21 +15,22 @@ import threading
 import requests
 from collections import defaultdict
 import io
-from flask import Flask, request  # ✅ أضفنا Flask
+from flask import Flask, request
 
 # إعداد التوكن وإنشاء البوت وFlask app
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
-app = Flask(__name__)  # ✅ تطبيق Flask
+app = Flask(__name__)
 
 # آيدي المطور من متغير البيئة
 admin_id = int(os.getenv('ADMIN_ID', '7384683084'))
 
 # تخزين العمليات والملفات
 user_files = {}  # {chat_id: {file_key: {'process': Popen, 'content': bytes, 'file_name': str, 'temp_path': str}}}
+pending_files = {}  # {pending_key: {'user_id': int, 'file_name': str, 'file_data': bytes, 'message_id': int}}
 banned_users = set()
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-MAX_MEMORY_USAGE = 300 * 1024 * 1024  # 300MB كحد أقصى لاستخدام الذاكرةكحد أقصى لاستخدام الذاكرة
+MAX_MEMORY_USAGE = 300 * 1024 * 1024  # 300MB كحد أقصى لاستخدام الذاكرة
 
 # تخزين بيانات الأدمن
 admin_users = {admin_id}  # مجموعة من آيدي الأدمن
@@ -223,7 +224,6 @@ def start(message):
     bot.send_message(message.chat.id, welcome, reply_markup=markup)
     save_data()
 
-# ===== زر المساعدة الجديد =====
 @bot.callback_query_handler(func=lambda call: call.data == 'help')
 def show_help(call):
     help_text = """
@@ -280,7 +280,8 @@ def admin_panel(message):
         types.InlineKeyboardButton("🔍 بحث عن مستخدم", callback_data='admin_search_user'),
         types.InlineKeyboardButton("📊 إحصائيات عامة", callback_data='admin_stats'),
         types.InlineKeyboardButton("🔒 قفل البوت", callback_data='admin_lock_bot'),
-        types.InlineKeyboardButton("👁️‍🗨️ مراقبة مباشرة", callback_data='admin_monitor')
+        types.InlineKeyboardButton("👁️‍🗨️ مراقبة مباشرة", callback_data='admin_monitor'),
+        types.InlineKeyboardButton("📭 ملفات في انتظار الموافقة", callback_data='admin_pending_files')
     ]
     
     # إضافة الأزرار في مجموعات
@@ -369,6 +370,9 @@ def handle_admin_callback(call):
     
     elif data == 'admin_monitor':
         toggle_live_monitoring(chat_id)
+    
+    elif data == 'admin_pending_files':
+        show_pending_files(call)
     
     # إضافة معالجة للزر العودة في لوحة الأدمن
     elif data == 'admin_back':
@@ -635,6 +639,7 @@ def show_bot_settings(chat_id):
 - 🧠 استخدام الذاكرة: {memory_usage_mb:.2f} MB / {max_memory_mb:.2f} MB
 - 👮 عدد الأدمن: {len(admin_users)}
 - 🚫 عدد المحظورين: {len(banned_users)}
+- 📭 الملفات في انتظار الموافقة: {len(pending_files)}
 """
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("تغيير حجم الملف", callback_data='change_file_size'))
@@ -678,6 +683,7 @@ def show_stats(chat_id):
 - 📂 إجمالي الملفات: {user_stats['total_files']}
 - 🤖 البوتات النشطة: {running_bots}
 - 🧠 استخدام الذاكرة: {memory_usage_mb:.2f} MB / {max_memory_mb:.2f} MB
+- 📭 الملفات في انتظار الموافقة: {len(pending_files)}
 - 📈 أكثر الأوامر استخداماً:
 """
     
@@ -748,6 +754,178 @@ def process_change_file_size(message):
     except:
         bot.reply_to(message, "❌ قيمة غير صحيحة. يجب أن يكون رقمًا")
 
+# ===== وظائف نظام الموافقة =====
+def show_pending_files(call):
+    """عرض الملفات في انتظار الموافقة"""
+    if not pending_files:
+        bot.answer_callback_query(call.id, "📭 لا يوجد ملفات في انتظار الموافقة")
+        return
+    
+    markup = types.InlineKeyboardMarkup()
+    for pending_key, file_info in pending_files.items():
+        user_id = file_info['user_id']
+        file_name = file_info['file_name']
+        markup.add(
+            types.InlineKeyboardButton(
+                f"👤 {user_id} - 📄 {file_name}",
+                callback_data=f"review_{pending_key}"
+            )
+        )
+    
+    markup.add(types.InlineKeyboardButton("العودة ←", callback_data='admin_back'))
+    
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="📭 *الملفات في انتظار الموافقة*:",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('review_'))
+def review_pending_file(call):
+    """مراجعة ملف معلق"""
+    pending_key = call.data.split('_')[1]
+    if pending_key not in pending_files:
+        bot.answer_callback_query(call.id, "❌ الملف غير موجود أو تمت معالجته مسبقاً")
+        return
+    
+    file_info = pending_files[pending_key]
+    
+    # إرسال الملف للأدمن للمراجعة
+    try:
+        bot.send_document(
+            call.message.chat.id,
+            io.BytesIO(file_info['file_data']),
+            visible_file_name=file_info['file_name'],
+            caption=f"📄 ملف مرفوع من المستخدم: {file_info['user_id']}\nاسم الملف: {file_info['file_name']}"
+        )
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"❌ فشل إرسال الملف: {str(e)}")
+        return
+    
+    # إنشاء أزرار الموافقة والرفض
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("✅ قبول الملف", callback_data=f"approve_{pending_key}"),
+        types.InlineKeyboardButton("❌ رفض الملف", callback_data=f"reject_{pending_key}")
+    )
+    markup.add(types.InlineKeyboardButton("العودة ←", callback_data='admin_pending_files'))
+    
+    bot.send_message(
+        call.message.chat.id,
+        f"⚖️ اختر الإجراء المناسب لهذا الملف:",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('approve_'))
+def approve_file(call):
+    """موافقة الأدمن على رفع الملف"""
+    pending_key = call.data.split('_')[1]
+    if pending_key not in pending_files:
+        bot.answer_callback_query(call.id, "❌ الملف غير موجود أو تمت معالجته مسبقاً")
+        return
+    
+    file_info = pending_files.pop(pending_key)
+    user_id = file_info['user_id']
+    file_name = file_info['file_name']
+    file_data = file_info['file_data']
+    original_msg_id = file_info['message_id']
+    
+    # إنشاء مفتاح فريد للملف
+    file_key = str(uuid.uuid4())[:8]
+    
+    # تخزين المحتوى في الذاكرة
+    if user_id not in user_files:
+        user_files[user_id] = {}
+        
+    user_files[user_id][file_key] = {
+        'file_name': file_name,
+        'content': file_data,
+        'process': None
+    }
+    
+    # تحديث إحصائيات الذاكرة
+    user_stats['memory_usage'] += len(file_data)
+    
+    # إنشاء ملف مؤقت للتشغيل
+    temp_path = create_temp_file(file_data, '.py')
+    user_files[user_id][file_key]['temp_path'] = temp_path
+    
+    # تثبيت المتطلبات
+    install_requirements(temp_path)
+    
+    # تشغيل الملف
+    proc = subprocess.Popen(["python3", temp_path])
+    user_files[user_id][file_key]['process'] = proc
+    
+    # تسجيل النشاط
+    user_stats['total_files'] += 1
+    log_activity(user_id, "موافقة على ملف", f"ملف: {file_name}")
+    
+    # إرسال إشعار للمستخدم
+    try:
+        # إنشاء الأزرار
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton(f"⏹️ ايقاف تشغيل {file_name}", callback_data=f'stop_{file_key}'),
+            types.InlineKeyboardButton(f"🗑️ حذف {file_name}", callback_data=f'delete_{file_key}')
+        )
+        markup.add(types.InlineKeyboardButton("📂 عرض جميع ملفاتي", callback_data='my_files'))
+        
+        bot.edit_message_text(
+            chat_id=user_id,
+            message_id=original_msg_id,
+            text=f"✅ تم قبول و تشغيل ملفك `{file_name}` بنجاح.",
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+    except:
+        # في حالة حذف المستخدم للرسالة الأصلية
+        bot.send_message(
+            user_id,
+            f"✅ تم قبول و تشغيل ملفك `{file_name}` بنجاح.",
+            parse_mode="Markdown"
+        )
+    
+    # إرسال إشعار للأدمن
+    bot.answer_callback_query(call.id, f"✅ تم قبول الملف وتشغيله للمستخدم {user_id}")
+    bot.send_message(call.message.chat.id, f"✅ تم قبول ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reject_'))
+def reject_file(call):
+    """رفض الأدمن لرفع الملف"""
+    pending_key = call.data.split('_')[1]
+    if pending_key not in pending_files:
+        bot.answer_callback_query(call.id, "❌ الملف غير موجود أو تمت معالجته مسبقاً")
+        return
+    
+    file_info = pending_files.pop(pending_key)
+    user_id = file_info['user_id']
+    file_name = file_info['file_name']
+    original_msg_id = file_info['message_id']
+    
+    # إرسال إشعار للمستخدم
+    try:
+        bot.edit_message_text(
+            chat_id=user_id,
+            message_id=original_msg_id,
+            text=f"❌ تم رفض ملفك `{file_name}` من قبل الأدمن.",
+            parse_mode="Markdown"
+        )
+    except:
+        # في حالة حذف المستخدم للرسالة الأصلية
+        bot.send_message(
+            user_id,
+            f"❌ تم رفض ملفك `{file_name}` من قبل الأدمن.",
+            parse_mode="Markdown"
+        )
+    
+    # إرسال إشعار للأدمن
+    bot.answer_callback_query(call.id, f"❌ تم رفض الملف للمستخدم {user_id}")
+    bot.send_message(call.message.chat.id, f"❌ تم رفض ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
+    log_activity(call.from_user.id, "رفض ملف", f"المستخدم: {user_id}, ملف: {file_name}")
+
 @bot.message_handler(content_types=['document'])
 def handle_file(message):
     if bot_locked:
@@ -762,7 +940,7 @@ def handle_file(message):
     file_size = file_info.file_size
 
     # إرسال رسالة الانتظار
-    waiting_msg = bot.send_message(message.chat.id, f"⏳ جاري رفع وتشغيل الملف `{file_name}`...", parse_mode="Markdown")
+    waiting_msg = bot.send_message(message.chat.id, f"⏳ جاري معالجة الملف `{file_name}`...", parse_mode="Markdown")
     
     if file_size > MAX_FILE_SIZE:
         bot.edit_message_text(
@@ -788,126 +966,47 @@ def handle_file(message):
         bot.edit_message_text(
             chat_id=waiting_msg.chat.id,
             message_id=waiting_msg.message_id,
-            text=f"�� فشل في رفع الملف `{file_name}`: {str(e)}"
+            text=f"❌ فشل في رفع الملف `{file_name}`: {str(e)}"
         )
         return
 
-    # إنشاء مفتاح فريد للملف
-    file_key = str(uuid.uuid4())[:8]
-
-    # إنشاء الأزرار
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton(f"⏹️ ايقاف تشغيل {file_name}", callback_data=f'stop_{file_key}'),
-        types.InlineKeyboardButton(f"🗑️ حذف {file_name}", callback_data=f'delete_{file_key}')
-    )
-    markup.add(types.InlineKeyboardButton("📂 عرض جميع ملفاتي", callback_data='my_files'))
-
-    # معالجة الملف
-    response = ""
-    proc = None
+    # حفظ الملف في قائمة الانتظار
+    pending_key = str(uuid.uuid4())[:8]
+    pending_files[pending_key] = {
+        'user_id': message.chat.id,
+        'file_name': file_name,
+        'file_data': file_data,
+        'message_id': waiting_msg.message_id
+    }
     
-    try:
-        if file_name.endswith(".py"):
-            # تخزين المحتوى في الذاكرة
-            if message.chat.id not in user_files:
-                user_files[message.chat.id] = {}
-                
-            user_files[message.chat.id][file_key] = {
-                'file_name': file_name,
-                'content': file_data,
-                'process': None
-            }
-            
-            # تحديث إحصائيات الذاكرة
-            user_stats['memory_usage'] += len(file_data)
-            
-            # إنشاء ملف مؤقت للتشغيل
-            temp_path = create_temp_file(file_data, '.py')
-            user_files[message.chat.id][file_key]['temp_path'] = temp_path
-            
-            # تثبيت المتطلبات
-            install_requirements(temp_path)
-            
-            # تشغيل الملف
-            proc = subprocess.Popen(["python3", temp_path])
-            user_files[message.chat.id][file_key]['process'] = proc
-            
-            response = f"✅ تم تشغيل الملف `{file_name}` بنجاح."
-            
-        elif file_name.endswith(".zip"):
-            # إنشاء مجلد مؤقت لفك الضغط
-            temp_dir = tempfile.mkdtemp()
-            zip_path = os.path.join(temp_dir, file_name)
-            with open(zip_path, 'wb') as f:
-                f.write(file_data)
-            
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
-            
-            # البحث عن ملفات البايثون الرئيسية
-            py_files = [f for f in os.listdir(temp_dir) if f.endswith('.py')]
-            main_file = None
-            
-            # محاولة العثور على ملف رئيسي
-            for candidate in ['main.py', 'bot.py', 'start.py', 'app.py']:
-                if candidate in py_files:
-                    main_file = os.path.join(temp_dir, candidate)
-                    break
-            
-            # إذا لم يتم العثور، استخدام أول ملف بايثون
-            if not main_file and py_files:
-                main_file = os.path.join(temp_dir, py_files[0])
-            
-            if main_file:
-                # تخزين المحتوى في الذاكرة
-                if message.chat.id not in user_files:
-                    user_files[message.chat.id] = {}
-                
-                with open(main_file, 'rb') as f:
-                    main_content = f.read()
-                
-                user_files[message.chat.id][file_key] = {
-                    'file_name': file_name,
-                    'content': main_content,
-                    'process': None,
-                    'temp_dir': temp_dir
-                }
-                
-                # تحديث إحصائيات الذاكرة
-                user_stats['memory_usage'] += len(main_content)
-                
-                # تثبيت المتطلبات
-                install_requirements(main_file)
-                
-                # تشغيل الملف
-                proc = subprocess.Popen(["python3", main_file])
-                user_files[message.chat.id][file_key]['process'] = proc
-                
-                response = f"✅ تم تشغيل الملف الرئيسي `{os.path.basename(main_file)}` بنجاح."
-            else:
-                response = f"✅ تم فك الضغط في المجلد المؤقت\n\n⚠️ لم يتم العثور على ملف بايثون رئيسي للتشغيل"
-        else:
-            response = "❌ صيغة غير مدعومة. استخدم .py أو .zip فقط."
-        
-        # تسجيل النشاط
-        user_stats['total_files'] += 1
-        log_activity(message.chat.id, "رفع وتشغيل ملف", f"ملف: {file_name}")
-        
-    except Exception as e:
-        response = f"❌ فشل في معالجة الملف `{file_name}`: {str(e)}"
-
-    # تحديث الرسالة النهائية
+    # إرسال إشعار للأدمن
+    for admin in admin_users:
+        try:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton("📭 عرض الملفات المعلقة", callback_data='admin_pending_files')
+            )
+            bot.send_message(
+                admin,
+                f"📬 هناك ملف جديد في انتظار الموافقة:\n"
+                f"👤 المستخدم: {message.chat.id}\n"
+                f"📄 اسم الملف: {file_name}\n"
+                f"📏 حجم الملف: {file_size//1024} KB",
+                reply_markup=markup
+            )
+        except:
+            pass
+    
+    # إعلام المستخدم بانتظار الموافقة
     bot.edit_message_text(
         chat_id=waiting_msg.chat.id,
         message_id=waiting_msg.message_id,
-        text=response,
-        parse_mode="Markdown",
-        reply_markup=markup
+        text=f"📬 تم استلام ملفك `{file_name}`.\n"
+             "⏳ جاري انتظار موافقة الأدمن قبل تشغيله...",
+        parse_mode="Markdown"
     )
     
-    # إرسال إشعار المراقبة المباشرة
-    live_monitor_notify("رفع ملف", message.chat.id, f"ملف: {file_name}")
+    log_activity(message.chat.id, "رفع ملف", f"ملف: {file_name} (في انتظار الموافقة)")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
@@ -1133,15 +1232,6 @@ def webhook():
 @app.route("/keepalive", methods=["GET"])
 def keepalive():
     return "I am alive!", 200
-
-# وظيفة للحفاظ على الخدمة نشطة (اختياري في حال استخدمته في أماكن ثانية)
-def keep_alive():
-    while True:
-        try:
-            requests.get("https://zil-1.onrender.com/keepalive")  # ✅ تأكد أن الرابط هو رابط تطبيقك على Render
-            time.sleep(300)  # كل 5 دقائق
-        except:
-            pass
 
 # بدء التطبيق
 if __name__ == "__main__":
