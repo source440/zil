@@ -1123,7 +1123,7 @@ def keep_alive():
     while True:
         try:
             # استبدل الرابط برابط تطبيقك على Render
-            requests.get("https://your-bot-name.onrender.com/keepalive")
+            requests.get("https://zil-1.onrender.com/keepalive")
             time.sleep(300)  # كل 5 دقائق
         except:
             pass
