@@ -186,55 +186,6 @@ def create_temp_file(content, suffix=''):
         temp_file.write(content)
         return temp_file.name
 
-def run_bot_in_thread(file_path, file_info, callback=None):
-    """تشغيل البوت في خيط منفصل"""
-    def thread_function():
-        try:
-            # تثبيت المتطلبات
-            install_requirements(file_path)
-            
-            # تشغيل الملف
-            proc = subprocess.Popen(["python3", file_path])
-            file_info['process'] = proc
-            
-            # تحديث الواجهة بعد التشغيل
-            if callback:
-                callback()
-                
-        except Exception as e:
-            print(f"Error in thread: {str(e)}")
-    
-    thread = threading.Thread(target=thread_function)
-    thread.start()
-
-def update_user_interface(user_id, message_id, file_key, file_name):
-    """تحديث واجهة المستخدم بعد التشغيل"""
-    try:
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(f"⏹️ ايقاف تشغيل {file_name}", callback_data=f'stop_{file_key}'),
-            types.InlineKeyboardButton(f"🗑️ حذف {file_name}", callback_data=f'delete_{file_key}')
-        )
-        markup.add(types.InlineKeyboardButton("📂 عرض جميع ملفاتي", callback_data='my_files'))
-        
-        bot.edit_message_text(
-            chat_id=user_id,
-            message_id=message_id,
-            text=f"✅ تم تشغيل `{file_name}` بنجاح!",
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-    except Exception as e:
-        print(f"Error updating interface: {str(e)}")
-        try:
-            bot.send_message(
-                user_id,
-                f"✅ تم تشغيل ملفك `{file_name}` بنجاح!",
-                parse_mode="Markdown"
-            )
-        except:
-            pass
-
 @bot.message_handler(commands=['start'])
 def start(message):
     if bot_locked:
@@ -318,7 +269,7 @@ def admin_panel(message):
         types.InlineKeyboardButton("✅ إلغاء الحظر", callback_data='admin_unban_user'),
         types.InlineKeyboardButton("🗂️ قائمة المحظورين", callback_data='admin_banned_list'),
         types.InlineKeyboardButton("🧪 اختبار بوت مستخدم", callback_data='admin_test_user_bot'),
-        types.InlineKeyboardButton("🔁 إعادة تشغيل بوت مستخدم", callback_data='admin_restart_user_bot'),
+        types.InlineKeyboardButton("🔁 إعادة ��شغيل بوت مستخدم", callback_data='admin_restart_user_bot'),
         types.InlineKeyboardButton("❌ إيقاف بوت مستخدم", callback_data='admin_stop_user_bot'),
         types.InlineKeyboardButton("🔄 إعادة تشغيل كل البوتات", callback_data='admin_restart_all'),
         types.InlineKeyboardButton("📦 عرض ملفات مستخدم", callback_data='admin_view_user_files'),
@@ -364,7 +315,7 @@ def handle_admin_callback(call):
         bot.register_next_step_handler(msg, process_ban_user)
     
     elif data == 'admin_unban_user':
-        msg = bot.send_message(chat_id, "أرسل آيدي المستخدم الذي تريد إلغاء حظره:")
+        msg = bot.send_message(chat_id, "أرسل آيدي المستخدم الذي ��ريد إلغاء حظره:")
         bot.register_next_step_handler(msg, process_unban_user)
     
     elif data == 'admin_banned_list':
@@ -489,12 +440,9 @@ def process_test_user_bot(message):
                 temp_path = create_temp_file(file_info['content'], '.py')
                 file_info['temp_path'] = temp_path
                 
-                # تشغيل الملف في خيط منفصل
-                run_bot_in_thread(
-                    temp_path,
-                    file_info,
-                    lambda: None
-                )
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", temp_path])
+                file_info['process'] = proc
         
         bot.reply_to(message, f"✅ تم اختبار وإعادة تشغيل بوتات المستخدم {user_id}")
         log_activity(message.from_user.id, "اختبار بوت مستخدم", f"ID: {user_id}")
@@ -520,12 +468,9 @@ def process_restart_user_bot(message):
                 temp_path = create_temp_file(file_info['content'], '.py')
                 file_info['temp_path'] = temp_path
                 
-                # تشغيل الملف في خيط منفصل
-                run_bot_in_thread(
-                    temp_path,
-                    file_info,
-                    lambda: None
-                )
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", temp_path])
+                file_info['process'] = proc
         
         bot.reply_to(message, f"✅ تم إعادة تشغيل بوتات المستخدم {user_id}")
         log_activity(message.from_user.id, "إعادة تشغيل بوت مستخدم", f"ID: {user_id}")
@@ -568,15 +513,12 @@ def restart_all_bots(chat_id):
                 temp_path = create_temp_file(file_info['content'], '.py')
                 file_info['temp_path'] = temp_path
                 
-                # تشغيل الملف في خيط منفصل
-                run_bot_in_thread(
-                    temp_path,
-                    file_info,
-                    lambda: None
-                )
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", temp_path])
+                file_info['process'] = proc
                 count += 1
     
-    bot.send_message(chat_id, f"✅ تم بدء إعادة تشغيل {count} بوت في الخلفية")
+    bot.send_message(chat_id, f"✅ تم إعادة تشغيل {count} بوت بنجاح")
     log_activity(chat_id, "إعادة تشغيل جميع البوتات", f"عدد: {count}")
 
 def process_view_user_files(message):
@@ -900,6 +842,7 @@ def approve_file(call):
         user_files[user_id] = {}
     
     response = ""
+    proc = None
     
     try:
         if file_name.endswith(".py"):
@@ -916,14 +859,14 @@ def approve_file(call):
             temp_path = create_temp_file(file_data, '.py')
             user_files[user_id][file_key]['temp_path'] = temp_path
             
-            # بدء تشغيل البوت في خيط منفصل
-            run_bot_in_thread(
-                temp_path,
-                user_files[user_id][file_key],
-                lambda: update_user_interface(user_id, original_msg_id, file_key, file_name)
-            )
+            # تثبيت المتطلبات
+            install_requirements(temp_path)
             
-            response = f"⏳ جاري تشغيل ملفك `{file_name}`..."
+            # تشغيل الملف
+            proc = subprocess.Popen(["python3", temp_path])
+            user_files[user_id][file_key]['process'] = proc
+            
+            response = f"✅ تم قبول و تشغيل ملفك `{file_name}` بنجاح."
             
         elif file_name.endswith(".zip"):
             # إنشاء مجلد مؤقت لفك الضغط
@@ -964,14 +907,14 @@ def approve_file(call):
                 # تحديث إحصائيات الذاكرة
                 user_stats['memory_usage'] += len(main_content)
                 
-                # بدء تشغيل البوت في خيط منفصل
-                run_bot_in_thread(
-                    main_file,
-                    user_files[user_id][file_key],
-                    lambda: update_user_interface(user_id, original_msg_id, file_key, os.path.basename(main_file))
-                )
+                # تثبيت المتطلبات
+                install_requirements(main_file)
                 
-                response = f"⏳ جاري تشغيل الملف الرئيسي `{os.path.basename(main_file)}`..."
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", main_file])
+                user_files[user_id][file_key]['process'] = proc
+                
+                response = f"✅ تم قبول و تشغيل الملف الرئيسي `{os.path.basename(main_file)}` من الأرشيف بنجاح."
             else:
                 response = f"✅ تم قبول الملف المضغوط `{file_name}`.\n\n⚠️ لم يتم العثور على ملف بايثون رئيسي للتشغيل"
         else:
@@ -1010,7 +953,7 @@ def approve_file(call):
         )
     
     # إرسال إشعار للأدمن
-    bot.answer_callback_query(call.id, f"✅ تم قبول الملف. جاري تشغيله...")
+    bot.answer_callback_query(call.id, f"✅ تم قبول الملف للمستخدم {user_id}")
     bot.send_message(call.message.chat.id, f"✅ تم قبول ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reject_'))
@@ -1067,7 +1010,7 @@ def handle_file(message):
         bot.edit_message_text(
             chat_id=waiting_msg.chat.id,
             message_id=waiting_msg.message_id,
-            text=f"⚠️ الملف `{file_name}` يتجاوز الحجم المسموح ({MAX_FILE_SIZE//(1024*1024)}MB)."
+            text=f"⚠️ الملف `{file_name}` يت��اوز الحجم المسموح ({MAX_FILE_SIZE//(1024*1024)}MB)."
         )
         return
     
@@ -1101,7 +1044,6 @@ def handle_file(message):
     }
     
     # إرسال إشعار للأدمن
-    admin_count = 0
     for admin in admin_users:
         try:
             markup = types.InlineKeyboardMarkup()
@@ -1116,7 +1058,6 @@ def handle_file(message):
                 f"📏 حجم الملف: {file_size//1024} KB",
                 reply_markup=markup
             )
-            admin_count += 1
         except:
             pass
     
@@ -1125,8 +1066,7 @@ def handle_file(message):
         chat_id=waiting_msg.chat.id,
         message_id=waiting_msg.message_id,
         text=f"📬 تم استلام ملفك `{file_name}`.\n"
-             "⏳ جاري انتظار موافقة الأدمن قبل تشغيله...\n"
-             f"🕒 تم إرسال الإشعار لـ {admin_count} أدمن",
+             "⏳ جاري انتظار موافقة الأدمن قبل تشغيله...",
         parse_mode="Markdown"
     )
     
@@ -1170,14 +1110,12 @@ def handle_callback(call):
                     temp_path = create_temp_file(file_info['content'], '.py')
                     file_info['temp_path'] = temp_path
                     
-                    # تشغيل الملف في خيط منفصل
-                    run_bot_in_thread(
-                        temp_path,
-                        file_info,
-                        lambda: file_actions(call)
-                    )
-                    
-                    bot.answer_callback_query(call.id, f"▶️ جاري تشغيل {file_info['file_name']}...")
+                    # تشغيل الملف
+                    proc = subprocess.Popen(["python3", temp_path])
+                    file_info['process'] = proc
+                    bot.answer_callback_query(call.id, f"▶️ تم تشغيل {file_info['file_name']}")
+                    # تحديث الواجهة
+                    file_actions(call)
                     log_activity(chat_id, "تشغيل ملف", f"ملف: {file_info['file_name']}")
                 else:
                     bot.answer_callback_query(call.id, "⚠️ لا يمكن تشغيل هذا النوع من الملفات.")
