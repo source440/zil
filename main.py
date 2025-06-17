@@ -16,6 +16,7 @@ import requests
 from collections import defaultdict
 import io
 from flask import Flask, request
+import math
 
 # إعداد التوكن وإنشاء البوت وFlask app
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -34,6 +35,11 @@ MAX_MEMORY_USAGE = 300 * 1024 * 1024  # 300MB كحد أقصى لاستخدام �
 
 # تخزين بيانات الأدمن
 admin_users = {admin_id}  # مجموعة من آيدي الأدمن
+premium_users = set()  # المستخدمون المميزون
+upload_settings = {
+    'global': 'approval',  # 'allow_all', 'deny_all', 'approval'
+    'non_premium_approval': True
+}
 user_activity = []  # سجل النشاطات
 all_users = set()  # جميع المستخدمين الذين بدأوا البوت
 user_stats = {  # إحصائيات البوت
@@ -54,6 +60,8 @@ def save_data():
     data = {
         'banned_users': list(banned_users),
         'admin_users': list(admin_users),
+        'premium_users': list(premium_users),
+        'upload_settings': upload_settings,
         'all_users': list(all_users),
         'user_stats': user_stats,
         'bot_locked': bot_locked,
@@ -64,13 +72,15 @@ def save_data():
 
 def load_data():
     """تحميل بيانات البوت من ملف"""
-    global banned_users, admin_users, all_users, user_stats, bot_locked, live_monitoring
+    global banned_users, admin_users, premium_users, upload_settings, all_users, user_stats, bot_locked, live_monitoring
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
                 banned_users = set(data.get('banned_users', []))
                 admin_users = set(data.get('admin_users', [admin_id]))
+                premium_users = set(data.get('premium_users', []))
+                upload_settings = data.get('upload_settings', upload_settings)
                 all_users = set(data.get('all_users', []))
                 user_stats = data.get('user_stats', user_stats)
                 bot_locked = data.get('bot_locked', False)
@@ -186,6 +196,208 @@ def create_temp_file(content, suffix=''):
         temp_file.write(content)
         return temp_file.name
 
+def get_progress_bar(percent):
+    """إنشاء شريط تقدم نصي"""
+    bar_length = 20
+    filled_length = int(bar_length * percent // 100)
+    bar = '▰' * filled_length + '▱' * (bar_length - filled_length)
+    return f"⇜ جـارِ  تشغيـل  البوت أنتظر قليلا  . . .🌐\n\n{bar}\n{percent}%"
+
+def update_progress_bar(chat_id, message_id, process_func, *args, **kwargs):
+    """تحديث شريط التقدم بشكل متحرك"""
+    # إرسال الرسالة الأولية
+    progress_msg = bot.send_message(chat_id, get_progress_bar(10))
+    
+    # قائمة بنسب التحديث
+    progress_steps = [20, 30, 40, 50, 60, 70, 80, 90]
+    current_step = 0
+    
+    # متغير لحفظ نتيجة العملية
+    result = {"status": "processing", "message": "", "file_info": None, "file_key": None}
+    
+    # دالة لتشغيل العملية الرئيسية
+    def run_process():
+        try:
+            success, message, file_info, file_key = process_func(*args, **kwargs)
+            result.update({
+                "status": "success" if success else "error",
+                "message": message,
+                "file_info": file_info,
+                "file_key": file_key
+            })
+        except Exception as e:
+            result.update({
+                "status": "error",
+                "message": f"❌ فشل في معالجة الملف: {str(e)}"
+            })
+    
+    # بدء العملية في خيط منفصل
+    process_thread = threading.Thread(target=run_process)
+    process_thread.start()
+    
+    # تحديث شريط التقدم أثناء معالجة الملفات
+    while process_thread.is_alive() and current_step < len(progress_steps):
+        time.sleep(0.5)
+        try:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=progress_msg.message_id,
+                text=get_progress_bar(progress_steps[current_step])
+            )
+            current_step += 1
+        except:
+            pass
+    
+    # انتظار انتهاء العملية مع تحديث أخير
+    process_thread.join()
+    
+    # التحديث النهائي إلى 100%
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_msg.message_id,
+            text=get_progress_bar(100)
+        )
+    except:
+        pass
+    
+    # إضافة تأخير بسيط قبل إظهار النتيجة
+    time.sleep(0.5)
+    
+    # إظهار نتيجة العملية النهائية
+    final_text = "✅ تم تشغيل بوتك بنجاح" if result["status"] == "success" else "❌ فشل تشغيل البوت"
+    final_text += "\n\n" + result["message"]
+    
+    # إنشاء أزرار التحكم إن وجدت
+    markup = None
+    if result["file_info"] and result["file_key"]:
+        file_name = result["file_info"]["file_name"]
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton(f"⏹️ ايقاف تشغيل {file_name}", callback_data=f'stop_{result["file_key"]}'),
+            types.InlineKeyboardButton(f"🗑️ حذف {file_name}", callback_data=f'delete_{result["file_key"]}')
+        )
+        markup.add(types.InlineKeyboardButton("📂 عرض جميع ملفاتي", callback_data='my_files'))
+    
+    # إرسال الرسالة النهائية
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=progress_msg.message_id,
+            text=final_text,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    except:
+        bot.send_message(chat_id, final_text, reply_markup=markup, parse_mode="Markdown")
+    
+    return result
+
+def process_and_run_file(user_id, file_name, file_data):
+    """معالجة وتشغيل الملف مع إرجاع النتائج"""
+    # إنشاء مفتاح فريد للملف
+    file_key = str(uuid.uuid4())[:8]
+    success = False
+    message = ""
+    file_info = None
+    
+    try:
+        if file_name.endswith(".py"):
+            if user_id not in user_files:
+                user_files[user_id] = {}
+            
+            user_files[user_id][file_key] = {
+                'file_name': file_name,
+                'content': file_data,
+                'process': None
+            }
+            
+            # تحديث إحصائيات الذاكرة
+            user_stats['memory_usage'] += len(file_data)
+            
+            # إنشاء ملف مؤقت للتشغيل
+            temp_path = create_temp_file(file_data, '.py')
+            user_files[user_id][file_key]['temp_path'] = temp_path
+            
+            # تثبيت المتطلبات
+            install_requirements(temp_path)
+            
+            # تشغيل الملف
+            proc = subprocess.Popen(["python3", temp_path])
+            user_files[user_id][file_key]['process'] = proc
+            
+            message = f"✅ تم رفع وتشغيل ملفك `{file_name}` بنجاح."
+            file_info = user_files[user_id][file_key]
+            success = True
+            
+        elif file_name.endswith(".zip"):
+            # إنشاء مجلد مؤقت لفك الضغط
+            temp_dir = tempfile.mkdtemp()
+            zip_path = os.path.join(temp_dir, file_name)
+            with open(zip_path, 'wb') as f:
+                f.write(file_data)
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+            
+            # البحث عن ملفات البايثون الرئيسية
+            py_files = [f for f in os.listdir(temp_dir) if f.endswith('.py')]
+            main_file = None
+            
+            # محاولة العثور على ملف رئيسي
+            for candidate in ['main.py', 'bot.py', 'start.py', 'app.py']:
+                if candidate in py_files:
+                    main_file = os.path.join(temp_dir, candidate)
+                    break
+            
+            # إذا لم يتم العثور، استخدام أول ملف بايثون
+            if not main_file and py_files:
+                main_file = os.path.join(temp_dir, py_files[0])
+            
+            if main_file:
+                # قراءة محتوى الملف الرئيسي
+                with open(main_file, 'rb') as f:
+                    main_content = f.read()
+                
+                if user_id not in user_files:
+                    user_files[user_id] = {}
+                
+                user_files[user_id][file_key] = {
+                    'file_name': os.path.basename(main_file),
+                    'content': main_content,
+                    'process': None,
+                    'temp_dir': temp_dir  # تخزين المسار لحذفه لاحقاً
+                }
+                
+                # تحديث إحصائيات الذاكرة
+                user_stats['memory_usage'] += len(main_content)
+                
+                # تثبيت المتطلبات
+                install_requirements(main_file)
+                
+                # تشغيل الملف
+                proc = subprocess.Popen(["python3", main_file])
+                user_files[user_id][file_key]['process'] = proc
+                
+                message = f"✅ تم رفع وتشغيل الملف الرئيسي `{os.path.basename(main_file)}` من الأرشيف بنجاح."
+                file_info = user_files[user_id][file_key]
+                success = True
+            else:
+                message = f"✅ تم رفع الملف المضغوط `{file_name}`.\n\n⚠️ لم يتم العثور على ملف بايثون رئيسي للتشغيل"
+                success = True
+        else:
+            message = f"❌ صيغة غير مدعومة: {file_name}"
+        
+        # تسجيل النشاط
+        if success:
+            user_stats['total_files'] += 1
+            log_activity(user_id, "رفع ملف", f"ملف: {file_name}")
+        
+    except Exception as e:
+        message = f"❌ فشل في معالجة الملف `{file_name}`: {str(e)}"
+    
+    return success, message, file_info, file_key
+
 @bot.message_handler(commands=['start'])
 def start(message):
     if bot_locked:
@@ -240,7 +452,7 @@ def show_help(call):
 💡 ملاحظات هامة:
 - يمكنك رفع ملف .py مباشرة إذا لم يكن بحاجة إلى مكتبات خارجية
 - عند الرفع كملف zip:
-  • سيتم البحث عن ملف رئيسي (main.py, bot.py, ...)
+  • سيتم البحث عن ملف رئيسي (main.py, bot.py, start.py, app.py)
   • سيتم تثبيت المكتبات من ملف requirements.txt تلقائيًا
 - الحد الأقصى لحجم الملف: 100MB
 - الملفات تحفظ مؤقتًا في الذاكرة وتُحذف عند التوقف
@@ -254,13 +466,36 @@ python-dotenv
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
+    load_data()  # تأكد من تحميل أحدث البيانات
     user_id = message.from_user.id
     if user_id not in admin_users:
         bot.reply_to(message, "⛔ ليس لديك صلاحية الوصول إلى لوحة الأدمن.")
         return
     
     log_activity(user_id, "فتح لوحة الأدمن")
+    send_admin_panel(message.chat.id)
+
+def send_admin_panel(chat_id, message_id=None):
+    """إرسال أو تحديث لوحة الأدمن"""
+    markup = generate_admin_markup()
+    text = "👮‍♂️ *لوحة تحكم الأدمن*"
     
+    if message_id:
+        try:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+        except:
+            bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
+    else:
+        bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
+
+def generate_admin_markup():
+    """إنشاء أزرار لوحة الأدمن"""
     markup = types.InlineKeyboardMarkup(row_width=2)
     buttons = [
         types.InlineKeyboardButton("📢 إرسال إذاعة", callback_data='admin_broadcast'),
@@ -281,7 +516,12 @@ def admin_panel(message):
         types.InlineKeyboardButton("📊 إحصائيات عامة", callback_data='admin_stats'),
         types.InlineKeyboardButton("🔒 قفل البوت", callback_data='admin_lock_bot'),
         types.InlineKeyboardButton("👁️‍🗨️ مراقبة مباشرة", callback_data='admin_monitor'),
-        types.InlineKeyboardButton("📭 ملفات في انتظار الموافقة", callback_data='admin_pending_files')
+        types.InlineKeyboardButton("📭 ملفات في انتظار الموافقة", callback_data='admin_pending_files'),
+        types.InlineKeyboardButton("⭐ إضافة Premium", callback_data='admin_add_premium'),
+        types.InlineKeyboardButton("❌ إزالة Premium", callback_data='admin_remove_premium'),
+        types.InlineKeyboardButton("✅ سماح للكل", callback_data='admin_allow_all'),
+        types.InlineKeyboardButton("❌ رفض الكل", callback_data='admin_deny_all'),
+        types.InlineKeyboardButton("🔐 إعدادات الرفع", callback_data='admin_upload_settings')
     ]
     
     # إضافة الأزرار في مجموعات
@@ -289,11 +529,12 @@ def admin_panel(message):
         row = buttons[i:i+2]
         markup.add(*row)
     
-    bot.send_message(message.chat.id, "👮‍♂️ *لوحة تحكم الأدمن*", parse_mode="Markdown", reply_markup=markup)
+    return markup
 
 # ===== معالجات لوحة الأدمن =====
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
 def handle_admin_callback(call):
+    load_data()  # تأكد من تحميل أحدث البيانات
     user_id = call.from_user.id
     if user_id not in admin_users:
         bot.answer_callback_query(call.id, "⛔ ليس لديك صلاحية!")
@@ -374,9 +615,98 @@ def handle_admin_callback(call):
     elif data == 'admin_pending_files':
         show_pending_files(call)
     
+    elif data == 'admin_add_premium':
+        msg = bot.send_message(chat_id, "أرسل آيدي المستخدم الذي تريد منحه صلاحية Premium:")
+        bot.register_next_step_handler(msg, process_add_premium)
+    
+    elif data == 'admin_remove_premium':
+        msg = bot.send_message(chat_id, "أرسل آيدي المستخدم الذي تريد إزالة صلاحية Premium منه:")
+        bot.register_next_step_handler(msg, process_remove_premium)
+    
+    elif data == 'admin_allow_all':
+        upload_settings['global'] = 'allow_all'
+        save_data()
+        bot.answer_callback_query(call.id, "✅ تم السماح للكل برفع الملفات دون موافقة")
+        log_activity(user_id, "تغيير إعدادات الرفع", "السماح للكل")
+    
+    elif data == 'admin_deny_all':
+        upload_settings['global'] = 'deny_all'
+        save_data()
+        bot.answer_callback_query(call.id, "✅ تم رفض رفع الملفات للكل حتى Premium")
+        log_activity(user_id, "تغيير إعدادات الرفع", "رفض الكل")
+    
+    elif data == 'admin_upload_settings':
+        show_upload_settings(call)
+    
     # إضافة معالجة للزر العودة في لوحة الأدمن
     elif data == 'admin_back':
-        admin_panel(call.message)
+        send_admin_panel(chat_id, call.message.message_id)
+
+def process_add_premium(message):
+    try:
+        user_id = int(message.text)
+        premium_users.add(user_id)
+        save_data()
+        bot.reply_to(message, f"✅ تم منح صلاحية Premium للمستخدم {user_id}")
+        log_activity(message.from_user.id, "إضافة Premium", f"ID: {user_id}")
+        
+        # إرسال إشعار للمستخدم
+        try:
+            bot.send_message(user_id, "🎉 تم ترقيتك إلى مستخدم Premium! يمكنك الآن رفع الملفات دون الحاجة إلى موافقة الأدمن.")
+        except:
+            pass
+    except:
+        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
+
+def process_remove_premium(message):
+    try:
+        user_id = int(message.text)
+        if user_id in premium_users:
+            premium_users.remove(user_id)
+            save_data()
+            bot.reply_to(message, f"✅ تم إزالة صلاحية Premium من المستخدم {user_id}")
+            log_activity(message.from_user.id, "إزالة Premium", f"ID: {user_id}")
+            
+            # إرسال إشعار للمستخدم
+            try:
+                bot.send_message(user_id, "⚠️ تم إزالة صلاحية Premium من حسابك. ستحتاج الآن إلى موافقة الأدمن لرفع الملفات.")
+            except:
+                pass
+        else:
+            bot.reply_to(message, "❌ هذا المستخدم ليس لديه صلاحية Premium")
+    except:
+        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
+
+def show_upload_settings(call):
+    settings = f"""
+⚙️ *إعدادات رفع الملفات الحالية*:
+
+- 🟢 الوضع العام: {upload_settings['global']}
+- 🟢 وضع Non-Premium: {'يتطلب موافقة' if upload_settings['non_premium_approval'] else 'مرفوض'}
+- 🟢 عدد مستخدمي Premium: {len(premium_users)}
+"""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("✅ تفعيل وضع الموافقة", callback_data='set_approval_mode'))
+    markup.add(types.InlineKeyboardButton("❌ رفض Non-Premium", callback_data='toggle_non_premium'))
+    markup.add(types.InlineKeyboardButton("العودة ←", callback_data='admin_back'))
+    bot.send_message(call.message.chat.id, settings, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'set_approval_mode')
+def set_approval_mode(call):
+    upload_settings['global'] = 'approval'
+    save_data()
+    bot.answer_callback_query(call.id, "✅ تم تفعيل وضع الموافقة (الافتراضي)")
+    log_activity(call.from_user.id, "تغيير إعدادات الرفع", "وضع الموافقة")
+    show_upload_settings(call)  # تحديث العرض
+
+@bot.callback_query_handler(func=lambda call: call.data == 'toggle_non_premium')
+def toggle_non_premium(call):
+    upload_settings['non_premium_approval'] = not upload_settings['non_premium_approval']
+    save_data()
+    status = "يتطلب موافقة" if upload_settings['non_premium_approval'] else "مرفوض"
+    bot.answer_callback_query(call.id, f"✅ تم تغيير وضع Non-Premium إلى: {status}")
+    log_activity(call.from_user.id, "تغيير إعدادات Non-Premium", f"الحالة: {status}")
+    show_upload_settings(call)  # تحديث العرض
 
 # ===== وظائف معالجة الأدمن =====
 def process_broadcast(message):
@@ -392,7 +722,7 @@ def process_broadcast(message):
             sent += 1
         except:
             failed += 1
-        time.sleep(0.1)  # تجنب حظر التليجرام
+        time.sleep(0.1)  # تجنب حظ�� التليجرام
     
     bot.reply_to(message, f"✅ تمت الإذاعة بنجاح:\n- تم الإرسال: {sent}\n- فشل: {failed}\n- الإجمالي: {total}")
     log_activity(message.from_user.id, "إرسال إذاعة", f"تم الإرسال: {sent}, فشل: {failed}")
@@ -653,6 +983,7 @@ def process_search_user(message):
     try:
         user_id = int(message.text)
         is_banned = "نعم" if user_id in banned_users else "لا"
+        is_premium = "نعم" if user_id in premium_users else "لا"
         num_files = len(user_files.get(user_id, {}))
         
         response = f"""
@@ -660,6 +991,7 @@ def process_search_user(message):
 
 - 🆔 الآيدي: `{user_id}`
 - 🚫 محظور: {is_banned}
+- ⭐ Premium: {is_premium}
 - 📂 عدد الملفات: {num_files}
 - 📅 تاريخ الانضمام: {'غير معروف'}
 """
@@ -682,6 +1014,7 @@ def show_stats(chat_id):
 📊 *إحصائيات البوت*:
 
 - 👥 إجمالي المستخدمين: {user_stats['total_users']}
+- ⭐ مستخدمي Premium: {len(premium_users)}
 - 📂 إجمالي الملفات: {user_stats['total_files']}
 - 🤖 البوتات النشطة: {running_bots}
 - 🧠 استخدام الذاكرة: {memory_usage_mb:.2f} MB / {max_memory_mb:.2f} MB
@@ -812,7 +1145,7 @@ def review_pending_file(call):
         types.InlineKeyboardButton("✅ قبول الملف", callback_data=f"approve_{pending_key}"),
         types.InlineKeyboardButton("❌ رفض الملف", callback_data=f"reject_{pending_key}")
     )
-    markup.add(types.InlineKeyboardButton("العودة ←", callback_data='admin_pending_files'))
+    markup.add(types.InlineKeyboardButton("العودة ←", callback_data='admin_back'))
     
     bot.send_message(
         call.message.chat.id,
@@ -834,123 +1167,15 @@ def approve_file(call):
     file_data = file_info['file_data']
     original_msg_id = file_info['message_id']
     
-    # إنشاء مفتاح فريد للملف
-    file_key = str(uuid.uuid4())[:8]
-    
-    # تخزين المحتوى في الذاكرة
-    if user_id not in user_files:
-        user_files[user_id] = {}
-    
-    response = ""
-    proc = None
-    
-    try:
-        if file_name.endswith(".py"):
-            user_files[user_id][file_key] = {
-                'file_name': file_name,
-                'content': file_data,
-                'process': None
-            }
-            
-            # تحديث إحصائيات الذاكرة
-            user_stats['memory_usage'] += len(file_data)
-            
-            # إنشاء ملف مؤقت للتشغيل
-            temp_path = create_temp_file(file_data, '.py')
-            user_files[user_id][file_key]['temp_path'] = temp_path
-            
-            # تثبيت المتطلبات
-            install_requirements(temp_path)
-            
-            # تشغيل الملف
-            proc = subprocess.Popen(["python3", temp_path])
-            user_files[user_id][file_key]['process'] = proc
-            
-            response = f"✅ تم قبول و تشغيل ملفك `{file_name}` بنجاح."
-            
-        elif file_name.endswith(".zip"):
-            # إنشاء مجلد مؤقت لفك الضغط
-            temp_dir = tempfile.mkdtemp()
-            zip_path = os.path.join(temp_dir, file_name)
-            with open(zip_path, 'wb') as f:
-                f.write(file_data)
-            
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
-            
-            # البحث عن ملفات البايثون الرئيسية
-            py_files = [f for f in os.listdir(temp_dir) if f.endswith('.py')]
-            main_file = None
-            
-            # مح��ولة العثور على ملف رئيسي
-            for candidate in ['main.py', 'bot.py', 'start.py', 'app.py']:
-                if candidate in py_files:
-                    main_file = os.path.join(temp_dir, candidate)
-                    break
-            
-            # إذا لم يتم العثور، استخدام أول ملف بايثون
-            if not main_file and py_files:
-                main_file = os.path.join(temp_dir, py_files[0])
-            
-            if main_file:
-                # قراءة محتوى الملف الرئيسي
-                with open(main_file, 'rb') as f:
-                    main_content = f.read()
-                
-                user_files[user_id][file_key] = {
-                    'file_name': os.path.basename(main_file),
-                    'content': main_content,
-                    'process': None,
-                    'temp_dir': temp_dir  # تخزين المسار لحذفه لاحقاً
-                }
-                
-                # تحديث إحصائيات الذاكرة
-                user_stats['memory_usage'] += len(main_content)
-                
-                # تثبيت المتطلبات
-                install_requirements(main_file)
-                
-                # تشغيل الملف
-                proc = subprocess.Popen(["python3", main_file])
-                user_files[user_id][file_key]['process'] = proc
-                
-                response = f"✅ تم قبول و تشغيل الملف الرئيسي `{os.path.basename(main_file)}` من الأرشيف بنجاح."
-            else:
-                response = f"✅ تم قبول الملف المضغوط `{file_name}`.\n\n⚠️ لم يتم العثور على ملف بايثون رئيسي للتشغيل"
-        else:
-            response = f"❌ صيغة غير مدعومة: {file_name}"
-        
-        # تسجيل النشاط
-        user_stats['total_files'] += 1
-        log_activity(user_id, "موافقة على ملف", f"ملف: {file_name}")
-        
-    except Exception as e:
-        response = f"❌ فشل في معالجة الملف `{file_name}`: {str(e)}"
-    
-    # إرسال إشعار للمستخدم
-    try:
-        # إنشاء الأزرار
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(f"⏹️ ايقاف تشغيل {file_name}", callback_data=f'stop_{file_key}'),
-            types.InlineKeyboardButton(f"🗑️ حذف {file_name}", callback_data=f'delete_{file_key}')
-        )
-        markup.add(types.InlineKeyboardButton("📂 عرض جميع ملفاتي", callback_data='my_files'))
-        
-        bot.edit_message_text(
-            chat_id=user_id,
-            message_id=original_msg_id,
-            text=response,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-    except:
-        # في حالة حذف المستخدم للرسالة الأصلية
-        bot.send_message(
-            user_id,
-            response,
-            parse_mode="Markdown"
-        )
+    # استخدام شريط التقدم المتحرك
+    update_progress_bar(
+        user_id,
+        original_msg_id,
+        process_and_run_file,
+        user_id,
+        file_name,
+        file_data
+    )
     
     # إرسال إشعار للأدمن
     bot.answer_callback_query(call.id, f"✅ تم قبول الملف للمستخدم {user_id}")
@@ -1034,13 +1259,70 @@ def handle_file(message):
         )
         return
 
-    # حفظ الملف في قائمة الانتظار
+    # التحقق من صلاحيات الرفع
+    user_id = message.chat.id
+    if upload_settings['global'] == 'allow_all':
+        # السماح للكل بدون موافقة
+        update_progress_bar(
+            user_id,
+            waiting_msg.message_id,
+            process_and_run_file,
+            user_id,
+            file_name,
+            file_data
+        )
+        return
+        
+    elif upload_settings['global'] == 'deny_all':
+        # رفض الكل حتى Premium
+        bot.edit_message_text(
+            chat_id=waiting_msg.chat.id,
+            message_id=waiting_msg.message_id,
+            text="⛔ تم رفع الملف بنجاح ولكن يحتاج لموافقة الأدمن"
+        )
+        add_to_pending(user_id, file_name, file_data, waiting_msg.message_id)
+        return
+        
+    elif upload_settings['global'] == 'approval':
+        # وضع الموافقة الافتراضي
+        if user_id in premium_users:
+            # مستخدم Premium لا يحتاج موافقة
+            update_progress_bar(
+                user_id,
+                waiting_msg.message_id,
+                process_and_run_file,
+                user_id,
+                file_name,
+                file_data
+            )
+        else:
+            # مستخدم عادي يحتاج موافقة
+            if upload_settings['non_premium_approval']:
+                # يحتاج موافقة
+                bot.edit_message_text(
+                    chat_id=waiting_msg.chat.id,
+                    message_id=waiting_msg.message_id,
+                    text="⏳ جاري انتظار موافقة الأدمن..."
+                )
+                add_to_pending(user_id, file_name, file_data, waiting_msg.message_id)
+            else:
+                # رفض مباشر لغير Premium
+                bot.edit_message_text(
+                    chat_id=waiting_msg.chat.id,
+                    message_id=waiting_msg.message_id,
+                    text="⛔ تم رفض رفع الملف لأنك لست مستخدم Premium"
+                )
+                log_activity(user_id, "رفض رفع ملف", f"ملف: {file_name} (غير Premium)")
+        return
+
+def add_to_pending(user_id, file_name, file_data, message_id):
+    """إضافة ملف إلى قائمة الانتظار"""
     pending_key = str(uuid.uuid4())[:8]
     pending_files[pending_key] = {
-        'user_id': message.chat.id,
+        'user_id': user_id,
         'file_name': file_name,
         'file_data': file_data,
-        'message_id': waiting_msg.message_id
+        'message_id': message_id
     }
     
     # إرسال إشعار للأدمن
@@ -1053,24 +1335,15 @@ def handle_file(message):
             bot.send_message(
                 admin,
                 f"📬 هناك ملف جديد في انتظار الموافقة:\n"
-                f"👤 المستخدم: {message.chat.id}\n"
+                f"👤 المستخدم: {user_id}\n"
                 f"📄 اسم الملف: {file_name}\n"
-                f"📏 حجم الملف: {file_size//1024} KB",
+                f"📏 حجم الملف: {len(file_data)//1024} KB",
                 reply_markup=markup
             )
         except:
             pass
     
-    # إعلام المستخدم بانتظار الموافقة
-    bot.edit_message_text(
-        chat_id=waiting_msg.chat.id,
-        message_id=waiting_msg.message_id,
-        text=f"📬 تم استلام ملفك `{file_name}`.\n"
-             "⏳ جاري انتظار موافقة الأدمن قبل تشغيله...",
-        parse_mode="Markdown"
-    )
-    
-    log_activity(message.chat.id, "رفع ملف", f"ملف: {file_name} (في انتظار الموافقة)")
+    log_activity(user_id, "رفع ملف", f"ملف: {file_name} (في انتظار الموافقة)")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
