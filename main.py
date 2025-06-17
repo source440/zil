@@ -45,8 +45,6 @@ user_stats = {  # إحصائيات البوت
 }
 bot_locked = False  # حالة قفل البوت
 live_monitoring = False  # حالة المراقبة المباشرة
-allow_all_uploads = False  # السماح للجميع برفع الملفات دون موافقة
-premium_users = set()  # مستخدمين مميزين يمكنهم الرفع دون موافقة
 
 # تخزين بيانات المستخدمين في ملف
 DATA_FILE = "bot_data.json"
@@ -59,16 +57,14 @@ def save_data():
         'all_users': list(all_users),
         'user_stats': user_stats,
         'bot_locked': bot_locked,
-        'live_monitoring': live_monitoring,
-        'allow_all_uploads': allow_all_uploads,
-        'premium_users': list(premium_users)
+        'live_monitoring': live_monitoring
     }
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f)
 
 def load_data():
     """تحميل بيانات البوت من ملف"""
-    global banned_users, admin_users, all_users, user_stats, bot_locked, live_monitoring, allow_all_uploads, premium_users
+    global banned_users, admin_users, all_users, user_stats, bot_locked, live_monitoring
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
@@ -79,8 +75,6 @@ def load_data():
                 user_stats = data.get('user_stats', user_stats)
                 bot_locked = data.get('bot_locked', False)
                 live_monitoring = data.get('live_monitoring', False)
-                allow_all_uploads = data.get('allow_all_uploads', False)
-                premium_users = set(data.get('premium_users', []))
     except Exception as e:
         print(f"حدث خطأ أثناء تحميل البيانات: {e}")
 
@@ -94,7 +88,7 @@ def log_activity(user_id, action, details=""):
         'details': details
     }
     user_activity.append(activity)
-    # ��فظ النشاط الأخير فقط (500 نشاط)
+    # حفظ النشاط الأخير فقط (500 نشاط)
     if len(user_activity) > 500:
         user_activity.pop(0)
 
@@ -122,14 +116,7 @@ def install_requirements(path):
         
         if os.path.exists(requirements_path):
             print(f"تم العثور على ملف المتطلبات: {requirements_path}")
-            # استخدام threading لتسريع العملية
-            def install_thread():
-                try:
-                    subprocess.call(['pip', 'install', '-r', requirements_path])
-                except Exception as e:
-                    print(f"فشل تثبيت المتطلبات: {e}")
-            
-            threading.Thread(target=install_thread).start()
+            subprocess.call(['pip', 'install', '-r', requirements_path])
             return
         
         # المحاولة الثانية: تحليل الشفرة المصدرية لاكتشاف المتطلبات
@@ -169,15 +156,12 @@ def install_requirements(path):
             
             print(f"المكتبات المكتشفة: {libraries}")
             
-            # تثبيت المكاتب المكتشفة باستخدام threading
-            def install_libs():
-                for lib in libraries:
-                    try:
-                        subprocess.call(['pip', 'install', lib])
-                    except Exception as e:
-                        print(f"فشل تثبيت {lib}: {e}")
-            
-            threading.Thread(target=install_libs).start()
+            # تثبيت المكاتب المكتشفة
+            for lib in libraries:
+                try:
+                    subprocess.call(['pip', 'install', lib])
+                except Exception as e:
+                    print(f"فشل تثبيت {lib}: {e}")
     
     except Exception as e:
         print(f"فشل التثبيت التلقائي: {e}")
@@ -210,7 +194,7 @@ def start(message):
     if message.from_user.id in banned_users:
         return bot.reply_to(message, "❌ تم حظرك من استخدام البوت.")
     
-    # إضافة المستخدم إلى ��لإحصائيات
+    # إضافة المستخدم إلى الإحصائيات
     all_users.add(message.chat.id)
     user_stats['total_users'] = len(all_users)
     user_stats['command_usage']['/start'] += 1
@@ -297,11 +281,7 @@ def admin_panel(message):
         types.InlineKeyboardButton("📊 إحصائيات عامة", callback_data='admin_stats'),
         types.InlineKeyboardButton("🔒 قفل البوت", callback_data='admin_lock_bot'),
         types.InlineKeyboardButton("👁️‍🗨️ مراقبة مباشرة", callback_data='admin_monitor'),
-        types.InlineKeyboardButton("📭 ملفات في انتظار الموافقة", callback_data='admin_pending_files'),
-        types.InlineKeyboardButton("✅ سماح للكل", callback_data='admin_allow_all'),
-        types.InlineKeyboardButton("❌ رفض للكل", callback_data='admin_reject_all'),
-        types.InlineKeyboardButton("⭐ Premium", callback_data='admin_premium'),
-        types.InlineKeyboardButton("🔓 Non-Premium", callback_data='admin_non_premium')
+        types.InlineKeyboardButton("📭 ملفات في انتظار الموافقة", callback_data='admin_pending_files')
     ]
     
     # إضافة الأزرار في مجموعات
@@ -394,58 +374,9 @@ def handle_admin_callback(call):
     elif data == 'admin_pending_files':
         show_pending_files(call)
     
-    # ===== إصلاح الأزرار الجديدة =====
-    elif data == 'admin_allow_all':
-        global allow_all_uploads
-        allow_all_uploads = True
-        bot.answer_callback_query(call.id, "✅ تم تفعيل وضع السماح للكل برفع الملفات دون موافقة")
-        log_activity(user_id, "تفعيل وضع السماح ل��كل")
-        save_data()
-    
-    elif data == 'admin_reject_all':
-        global allow_all_uploads
-        allow_all_uploads = False
-        bot.answer_callback_query(call.id, "❌ تم تعطيل وضع السماح للكل، سيحتاج الجميع موافقة الأدمن")
-        log_activity(user_id, "تعطيل وضع السماح للكل")
-        save_data()
-    
-    elif data == 'admin_premium':
-        msg = bot.send_message(chat_id, "أرسل آيدي المستخدم الذي تريد منحه صلاحية Premium:")
-        bot.register_next_step_handler(msg, process_add_premium)
-    
-    elif data == 'admin_non_premium':
-        msg = bot.send_message(chat_id, "أرسل آيدي المستخدم الذي تريد إزالة صلاحية Premium منه:")
-        bot.register_next_step_handler(msg, process_remove_premium)
-    
     # إضافة معالجة للزر العودة في لوحة الأدمن
     elif data == 'admin_back':
         admin_panel(call.message)
-
-# ===== وظائف معالجة الأدمن الجديدة =====
-def process_add_premium(message):
-    """إضافة مستخدم لقائمة Premium"""
-    try:
-        user_id = int(message.text)
-        premium_users.add(user_id)
-        bot.reply_to(message, f"✅ تم منح المستخدم {user_id} صلاحية Premium بنجاح")
-        log_activity(message.from_user.id, "إضافة مستخدم Premium", f"ID: {user_id}")
-        save_data()
-    except:
-        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
-
-def process_remove_premium(message):
-    """إزالة مستخدم من قائمة Premium"""
-    try:
-        user_id = int(message.text)
-        if user_id in premium_users:
-            premium_users.remove(user_id)
-            bot.reply_to(message, f"✅ تم إزالة صلاحية Premium من المستخدم {user_id}")
-            log_activity(message.from_user.id, "إزالة مستخدم Premium", f"ID: {user_id}")
-            save_data()
-        else:
-            bot.reply_to(message, "❌ هذا المستخدم ليس في قائمة Premium")
-    except:
-        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
 
 # ===== وظائف معالجة الأدمن =====
 def process_broadcast(message):
@@ -542,7 +473,7 @@ def process_restart_user_bot(message):
                 file_info['process'] = proc
         
         bot.reply_to(message, f"✅ تم إعادة تشغيل بوتات المستخدم {user_id}")
-        log_activity(message.from_user.id, "إع��دة تشغيل بوت مستخدم", f"ID: {user_id}")
+        log_activity(message.from_user.id, "إعادة تشغيل بوت مستخدم", f"ID: {user_id}")
     except:
         bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
 
@@ -569,7 +500,7 @@ def process_stop_user_bot(message):
         bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
 
 def restart_all_bots(chat_id):
-    """إعاد�� تشغيل جميع البوتات"""
+    """إعادة تشغيل جميع البوتات"""
     count = 0
     for user_id, files in user_files.items():
         for file_key, file_info in files.items():
@@ -682,7 +613,7 @@ def show_activity_log(chat_id):
         bot.send_message(chat_id, "📭 سجل النشاطات فارغ")
         return
     
-    # عرض آخر 10 نشاطا��
+    # عرض آخر 10 نشاطات
     recent_activity = user_activity[-10:]
     activity_list = []
     
@@ -710,9 +641,7 @@ def show_bot_settings(chat_id):
 - 🧠 استخدام الذاكرة: {memory_usage_mb:.2f} MB / {max_memory_mb:.2f} MB
 - 👮 عدد الأدمن: {len(admin_users)}
 - 🚫 عدد المحظورين: {len(banned_users)}
-- 📭 الملفات في ان��ظار الموافقة: {len(pending_files)}
-- ✅ السماح للكل: {'نعم' if allow_all_uploads else 'لا'}
-- ⭐ مستخدمين Premium: {len(premium_users)}
+- 📭 الملفات في انتظار الموافقة: {len(pending_files)}
 """
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("تغيير حجم الملف", callback_data='change_file_size'))
@@ -724,7 +653,6 @@ def process_search_user(message):
     try:
         user_id = int(message.text)
         is_banned = "نعم" if user_id in banned_users else "لا"
-        is_premium = "نعم" if user_id in premium_users else "لا"
         num_files = len(user_files.get(user_id, {}))
         
         response = f"""
@@ -732,7 +660,6 @@ def process_search_user(message):
 
 - 🆔 الآيدي: `{user_id}`
 - 🚫 محظور: {is_banned}
-- ⭐ Premium: {is_premium}
 - 📂 عدد الملفات: {num_files}
 - 📅 تاريخ الانضمام: {'غير معروف'}
 """
@@ -759,8 +686,6 @@ def show_stats(chat_id):
 - 🤖 البوتات النشطة: {running_bots}
 - 🧠 استخدام الذاكرة: {memory_usage_mb:.2f} MB / {max_memory_mb:.2f} MB
 - 📭 الملفات في انتظار الموافقة: {len(pending_files)}
-- ✅ السماح للكل: {'نعم' if allow_all_uploads else 'لا'}
-- ⭐ مستخدمين Premium: {len(premium_users)}
 - 📈 أكثر الأوامر استخداماً:
 """
     
@@ -904,17 +829,6 @@ def approve_file(call):
         return
     
     file_info = pending_files.pop(pending_key)
-    
-    # بدء معالجة الملف في خيط منفصل
-    threading.Thread(
-        target=process_approved_file, 
-        args=(file_info, call)
-    ).start()
-    
-    bot.answer_callback_query(call.id, "⏳ بدأت معالجة الملف...")
-
-def process_approved_file(file_info, call):
-    """معالجة الملف المعتمد في خيط منفصل"""
     user_id = file_info['user_id']
     file_name = file_info['file_name']
     file_data = file_info['file_data']
@@ -945,8 +859,8 @@ def process_approved_file(file_info, call):
             temp_path = create_temp_file(file_data, '.py')
             user_files[user_id][file_key]['temp_path'] = temp_path
             
-            # تثبيت المتطلبات في خيط منفصل
-            threading.Thread(target=install_requirements, args=(temp_path,)).start()
+            # تثبيت المتطلبات
+            install_requirements(temp_path)
             
             # تشغيل الملف
             proc = subprocess.Popen(["python3", temp_path])
@@ -968,7 +882,7 @@ def process_approved_file(file_info, call):
             py_files = [f for f in os.listdir(temp_dir) if f.endswith('.py')]
             main_file = None
             
-            # محاولة العثور على ملف رئيسي
+            # مح��ولة العثور على ملف رئيسي
             for candidate in ['main.py', 'bot.py', 'start.py', 'app.py']:
                 if candidate in py_files:
                     main_file = os.path.join(temp_dir, candidate)
@@ -993,8 +907,8 @@ def process_approved_file(file_info, call):
                 # تحديث إحصائيات الذاكرة
                 user_stats['memory_usage'] += len(main_content)
                 
-                # تثبيت المتطلبات في خيط منفصل
-                threading.Thread(target=install_requirements, args=(main_file,)).start()
+                # تثبيت المتطلبات
+                install_requirements(main_file)
                 
                 # تشغيل الملف
                 proc = subprocess.Popen(["python3", main_file])
@@ -1039,7 +953,8 @@ def process_approved_file(file_info, call):
         )
     
     # إرسال إشعار للأدمن
-    bot.send_message(call.message.chat.id, f"✅ تم معالجة ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
+    bot.answer_callback_query(call.id, f"✅ تم قبول الملف للمستخدم {user_id}")
+    bot.send_message(call.message.chat.id, f"✅ تم قبول ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reject_'))
 def reject_file(call):
@@ -1074,127 +989,6 @@ def reject_file(call):
     bot.answer_callback_query(call.id, f"❌ تم رفض الملف للمستخدم {user_id}")
     bot.send_message(call.message.chat.id, f"❌ تم رفض ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
     log_activity(call.from_user.id, "رفض ملف", f"المستخدم: {user_id}, ملف: {file_name}")
-
-# ===== وظيفة معالجة الملفات دون موافقة =====
-def process_file_without_approval(user_id, file_name, file_data, message_id):
-    """معالجة الملف دون الحاجة لموافقة الأدمن في خيط منفصل"""
-    # إنشاء مفتاح فريد للملف
-    file_key = str(uuid.uuid4())[:8]
-    
-    # تخزين المحتوى في الذاكرة
-    if user_id not in user_files:
-        user_files[user_id] = {}
-    
-    response = ""
-    proc = None
-    
-    try:
-        if file_name.endswith(".py"):
-            user_files[user_id][file_key] = {
-                'file_name': file_name,
-                'content': file_data,
-                'process': None
-            }
-            
-            # تحديث إحصائيات الذاكرة
-            user_stats['memory_usage'] += len(file_data)
-            
-            # إنشاء ملف مؤقت للتشغيل
-            temp_path = create_temp_file(file_data, '.py')
-            user_files[user_id][file_key]['temp_path'] = temp_path
-            
-            # تثبيت المتطلبات في خيط منفصل
-            threading.Thread(target=install_requirements, args=(temp_path,)).start()
-            
-            # تشغيل الملف
-            proc = subprocess.Popen(["python3", temp_path])
-            user_files[user_id][file_key]['process'] = proc
-            
-            response = f"✅ تم تشغيل ملفك `{file_name}` بنجاح."
-            
-        elif file_name.endswith(".zip"):
-            # إنشاء مجلد مؤقت لفك الضغط
-            temp_dir = tempfile.mkdtemp()
-            zip_path = os.path.join(temp_dir, file_name)
-            with open(zip_path, 'wb') as f:
-                f.write(file_data)
-            
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
-            
-            # البحث عن ملفات البايثون الرئيسية
-            py_files = [f for f in os.listdir(temp_dir) if f.endswith('.py')]
-            main_file = None
-            
-            # محاولة العثور على ملف رئيسي
-            for candidate in ['main.py', 'bot.py', 'start.py', 'app.py']:
-                if candidate in py_files:
-                    main_file = os.path.join(temp_dir, candidate)
-                    break
-            
-            # إذا لم يتم العثور، استخدام أول ملف بايثون
-            if not main_file and py_files:
-                main_file = os.path.join(temp_dir, py_files[0])
-            
-            if main_file:
-                # قراءة محتوى الملف الرئيسي
-                with open(main_file, 'rb') as f:
-                    main_content = f.read()
-                
-                user_files[user_id][file_key] = {
-                    'file_name': os.path.basename(main_file),
-                    'content': main_content,
-                    'process': None,
-                    'temp_dir': temp_dir  # تخزين المسار لحذفه لاحقاً
-                }
-                
-                # تحديث إحصائيات الذاكرة
-                user_stats['memory_usage'] += len(main_content)
-                
-                # تثبيت المتطلبات في خيط منفصل
-                threading.Thread(target=install_requirements, args=(main_file,)).start()
-                
-                # تشغيل الملف
-                proc = subprocess.Popen(["python3", main_file])
-                user_files[user_id][file_key]['process'] = proc
-                
-                response = f"✅ تم تشغيل الملف الرئيسي `{os.path.basename(main_file)}` من الأرشيف بنجاح."
-            else:
-                response = f"✅ تم استلام الملف المضغوط `{file_name}`.\n\n⚠️ لم يتم العثور على ملف بايثون رئيسي للتشغيل"
-        else:
-            response = f"❌ صيغة غير مدعومة: {file_name}"
-        
-        # تسجيل النشاط
-        user_stats['total_files'] += 1
-        log_activity(user_id, "رفع ملف", f"ملف: {file_name}")
-        
-    except Exception as e:
-        response = f"❌ فشل في معالجة الملف `{file_name}`: {str(e)}"
-    
-    # إرسال إشعار للمستخدم
-    try:
-        # إنشاء الأزرار
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(f"⏹️ ايقاف تشغيل {file_name}", callback_data=f'stop_{file_key}'),
-            types.InlineKeyboardButton(f"🗑️ حذف {file_name}", callback_data=f'delete_{file_key}')
-        )
-        markup.add(types.InlineKeyboardButton("📂 عرض جميع ملفاتي", callback_data='my_files'))
-        
-        bot.edit_message_text(
-            chat_id=user_id,
-            message_id=message_id,
-            text=response,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
-    except:
-        # في حالة حذف المستخدم للرسالة الأصلية
-        bot.send_message(
-            user_id,
-            response,
-            parse_mode="Markdown"
-        )
 
 @bot.message_handler(content_types=['document'])
 def handle_file(message):
@@ -1240,57 +1034,43 @@ def handle_file(message):
         )
         return
 
-    user_id = message.chat.id
+    # حفظ الملف في قائمة الانتظار
+    pending_key = str(uuid.uuid4())[:8]
+    pending_files[pending_key] = {
+        'user_id': message.chat.id,
+        'file_name': file_name,
+        'file_data': file_data,
+        'message_id': waiting_msg.message_id
+    }
     
-    # التحقق من صلاحيات الرفع
-    if (user_id in admin_users or 
-        user_id in premium_users or 
-        allow_all_uploads):
-        
-        # بدء معالجة الملف في خيط منفصل
-        threading.Thread(
-            target=process_file_without_approval, 
-            args=(user_id, file_name, file_data, waiting_msg.message_id)
-        ).start()
-        log_activity(user_id, "رفع ملف مباشر", f"ملف: {file_name}")
-    else:
-        # حفظ الملف في قائمة الانتظار
-        pending_key = str(uuid.uuid4())[:8]
-        pending_files[pending_key] = {
-            'user_id': user_id,
-            'file_name': file_name,
-            'file_data': file_data,
-            'message_id': waiting_msg.message_id
-        }
-        
-        # إرسال إشعار للأدمن
-        for admin in admin_users:
-            try:
-                markup = types.InlineKeyboardMarkup()
-                markup.add(
-                    types.InlineKeyboardButton("📭 عرض الملفات المعلقة", callback_data='admin_pending_files')
-                )
-                bot.send_message(
-                    admin,
-                    f"📬 هناك ملف جديد في انتظار الموافقة:\n"
-                    f"👤 المستخدم: {user_id}\n"
-                    f"📄 اسم الملف: {file_name}\n"
-                    f"📏 حجم الملف: {file_size//1024} KB",
-                    reply_markup=markup
-                )
-            except:
-                pass
-        
-        # إعلام المستخدم بانتظار الموافقة
-        bot.edit_message_text(
-            chat_id=waiting_msg.chat.id,
-            message_id=waiting_msg.message_id,
-            text=f"📬 تم استلام ملفك `{file_name}`.\n"
-                 "⏳ جاري انتظار موافقة الأدمن قبل تشغيله...",
-            parse_mode="Markdown"
-        )
-        
-        log_activity(user_id, "رفع ملف", f"ملف: {file_name} (في انتظار الموافقة)")
+    # إرسال إشعار للأدمن
+    for admin in admin_users:
+        try:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton("📭 عرض الملفات المعلقة", callback_data='admin_pending_files')
+            )
+            bot.send_message(
+                admin,
+                f"📬 هناك ملف جديد في انتظار الموافقة:\n"
+                f"👤 المستخدم: {message.chat.id}\n"
+                f"📄 اسم الملف: {file_name}\n"
+                f"📏 حجم الملف: {file_size//1024} KB",
+                reply_markup=markup
+            )
+        except:
+            pass
+    
+    # إعلام المستخدم بانتظار الموافقة
+    bot.edit_message_text(
+        chat_id=waiting_msg.chat.id,
+        message_id=waiting_msg.message_id,
+        text=f"📬 تم استلام ملفك `{file_name}`.\n"
+             "⏳ جاري انتظار موافقة الأدمن قبل تشغيله...",
+        parse_mode="Markdown"
+    )
+    
+    log_activity(message.chat.id, "رفع ملف", f"ملف: {file_name} (في انتظار الموافقة)")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
@@ -1413,11 +1193,6 @@ def show_user_files(call):
     if chat_id not in user_files or not user_files[chat_id]:
         bot.answer_callback_query(call.id, "⚠️ ليس لديك أي ملفات مخزنة.")
         return
-    
-    files_info = []
-    for file_key, file_info in user_files[chat_id].items():
-        status = "🟢 قيد التشغيل" if file_info.get('process') and file_info['process'].poll() is None else "🔴 متوقف"
-        files_info.append(f"📄 {file_info['file_name']} - {status}")
     
     markup = types.InlineKeyboardMarkup()
     for file_key, file_info in user_files[chat_id].items():
