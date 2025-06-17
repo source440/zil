@@ -94,7 +94,7 @@ def log_activity(user_id, action, details=""):
         'details': details
     }
     user_activity.append(activity)
-    # حفظ النشاط الأخير فقط (500 نشاط)
+    # ��فظ النشاط الأخير فقط (500 نشاط)
     if len(user_activity) > 500:
         user_activity.pop(0)
 
@@ -122,7 +122,14 @@ def install_requirements(path):
         
         if os.path.exists(requirements_path):
             print(f"تم العثور على ملف المتطلبات: {requirements_path}")
-            subprocess.call(['pip', 'install', '-r', requirements_path])
+            # استخدام threading لتسريع العملية
+            def install_thread():
+                try:
+                    subprocess.call(['pip', 'install', '-r', requirements_path])
+                except Exception as e:
+                    print(f"فشل تثبيت المتطلبات: {e}")
+            
+            threading.Thread(target=install_thread).start()
             return
         
         # المحاولة الثانية: تحليل الشفرة المصدرية لاكتشاف المتطلبات
@@ -162,12 +169,15 @@ def install_requirements(path):
             
             print(f"المكتبات المكتشفة: {libraries}")
             
-            # تثبيت المكاتب المكتشفة
-            for lib in libraries:
-                try:
-                    subprocess.call(['pip', 'install', lib])
-                except Exception as e:
-                    print(f"فشل تثبيت {lib}: {e}")
+            # تثبيت المكاتب المكتشفة باستخدام threading
+            def install_libs():
+                for lib in libraries:
+                    try:
+                        subprocess.call(['pip', 'install', lib])
+                    except Exception as e:
+                        print(f"فشل تثبيت {lib}: {e}")
+            
+            threading.Thread(target=install_libs).start()
     
     except Exception as e:
         print(f"فشل التثبيت التلقائي: {e}")
@@ -200,7 +210,7 @@ def start(message):
     if message.from_user.id in banned_users:
         return bot.reply_to(message, "❌ تم حظرك من استخدام البوت.")
     
-    # إضافة المستخدم إلى الإحصائيات
+    # إضافة المستخدم إلى ��لإحصائيات
     all_users.add(message.chat.id)
     user_stats['total_users'] = len(all_users)
     user_stats['command_usage']['/start'] += 1
@@ -384,13 +394,16 @@ def handle_admin_callback(call):
     elif data == 'admin_pending_files':
         show_pending_files(call)
     
+    # ===== إصلاح الأزرار الجديدة =====
     elif data == 'admin_allow_all':
+        global allow_all_uploads
         allow_all_uploads = True
         bot.answer_callback_query(call.id, "✅ تم تفعيل وضع السماح للكل برفع الملفات دون موافقة")
-        log_activity(user_id, "تفعيل وضع السماح للكل")
+        log_activity(user_id, "تفعيل وضع السماح ل��كل")
         save_data()
     
     elif data == 'admin_reject_all':
+        global allow_all_uploads
         allow_all_uploads = False
         bot.answer_callback_query(call.id, "❌ تم تعطيل وضع السماح للكل، سيحتاج الجميع موافقة الأدمن")
         log_activity(user_id, "تعطيل وضع السماح للكل")
@@ -503,7 +516,7 @@ def process_test_user_bot(message):
         bot.reply_to(message, f"✅ تم اختبار وإعادة تشغيل بوتات المستخدم {user_id}")
         log_activity(message.from_user.id, "اختبار بوت مستخدم", f"ID: {user_id}")
     except:
-        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقم��ا")
+        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
 
 def process_restart_user_bot(message):
     """إعادة تشغيل بوتات مستخدم"""
@@ -529,7 +542,7 @@ def process_restart_user_bot(message):
                 file_info['process'] = proc
         
         bot.reply_to(message, f"✅ تم إعادة تشغيل بوتات المستخدم {user_id}")
-        log_activity(message.from_user.id, "إعادة تشغيل بوت مستخدم", f"ID: {user_id}")
+        log_activity(message.from_user.id, "إع��دة تشغيل بوت مستخدم", f"ID: {user_id}")
     except:
         bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
 
@@ -556,7 +569,7 @@ def process_stop_user_bot(message):
         bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
 
 def restart_all_bots(chat_id):
-    """إعادة تشغيل جميع البوتات"""
+    """إعاد�� تشغيل جميع البوتات"""
     count = 0
     for user_id, files in user_files.items():
         for file_key, file_info in files.items():
@@ -669,7 +682,7 @@ def show_activity_log(chat_id):
         bot.send_message(chat_id, "📭 سجل النشاطات فارغ")
         return
     
-    # عرض آخر 10 نشاطات
+    # عرض آخر 10 نشاطا��
     recent_activity = user_activity[-10:]
     activity_list = []
     
@@ -697,7 +710,7 @@ def show_bot_settings(chat_id):
 - 🧠 استخدام الذاكرة: {memory_usage_mb:.2f} MB / {max_memory_mb:.2f} MB
 - 👮 عدد الأدمن: {len(admin_users)}
 - 🚫 عدد المحظورين: {len(banned_users)}
-- 📭 الملفات في انتظار الموافقة: {len(pending_files)}
+- 📭 الملفات في ان��ظار الموافقة: {len(pending_files)}
 - ✅ السماح للكل: {'نعم' if allow_all_uploads else 'لا'}
 - ⭐ مستخدمين Premium: {len(premium_users)}
 """
@@ -891,6 +904,17 @@ def approve_file(call):
         return
     
     file_info = pending_files.pop(pending_key)
+    
+    # بدء معالجة الملف في خيط منفصل
+    threading.Thread(
+        target=process_approved_file, 
+        args=(file_info, call)
+    ).start()
+    
+    bot.answer_callback_query(call.id, "⏳ بدأت معالجة الملف...")
+
+def process_approved_file(file_info, call):
+    """معالجة الملف المعتمد في خيط منفصل"""
     user_id = file_info['user_id']
     file_name = file_info['file_name']
     file_data = file_info['file_data']
@@ -921,8 +945,8 @@ def approve_file(call):
             temp_path = create_temp_file(file_data, '.py')
             user_files[user_id][file_key]['temp_path'] = temp_path
             
-            # تثبيت المتطلبات
-            install_requirements(temp_path)
+            # تثبيت المتطلبات في خيط منفصل
+            threading.Thread(target=install_requirements, args=(temp_path,)).start()
             
             # تشغيل الملف
             proc = subprocess.Popen(["python3", temp_path])
@@ -969,8 +993,8 @@ def approve_file(call):
                 # تحديث إحصائيات الذاكرة
                 user_stats['memory_usage'] += len(main_content)
                 
-                # تثبيت المتطلبات
-                install_requirements(main_file)
+                # تثبيت المتطلبات في خيط منفصل
+                threading.Thread(target=install_requirements, args=(main_file,)).start()
                 
                 # تشغيل الملف
                 proc = subprocess.Popen(["python3", main_file])
@@ -1015,8 +1039,7 @@ def approve_file(call):
         )
     
     # إرسال إشعار للأدمن
-    bot.answer_callback_query(call.id, f"✅ تم قبول الملف للمستخدم {user_id}")
-    bot.send_message(call.message.chat.id, f"✅ تم قبول ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
+    bot.send_message(call.message.chat.id, f"✅ تم معالجة ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('reject_'))
 def reject_file(call):
@@ -1054,7 +1077,7 @@ def reject_file(call):
 
 # ===== وظيفة معالجة الملفات دون موافقة =====
 def process_file_without_approval(user_id, file_name, file_data, message_id):
-    """معالجة الملف دون الحاجة لموافقة الأدمن"""
+    """معالجة الملف دون الحاجة لموافقة الأدمن في خيط منفصل"""
     # إنشاء مفتاح فريد للملف
     file_key = str(uuid.uuid4())[:8]
     
@@ -1080,8 +1103,8 @@ def process_file_without_approval(user_id, file_name, file_data, message_id):
             temp_path = create_temp_file(file_data, '.py')
             user_files[user_id][file_key]['temp_path'] = temp_path
             
-            # تثبيت المتطلبات
-            install_requirements(temp_path)
+            # تثبيت المتطلبات في خيط منفصل
+            threading.Thread(target=install_requirements, args=(temp_path,)).start()
             
             # تشغيل الملف
             proc = subprocess.Popen(["python3", temp_path])
@@ -1128,8 +1151,8 @@ def process_file_without_approval(user_id, file_name, file_data, message_id):
                 # تحديث إحصائيات الذاكرة
                 user_stats['memory_usage'] += len(main_content)
                 
-                # تثبيت المتطلبات
-                install_requirements(main_file)
+                # تثبيت المتطلبات في خيط منفصل
+                threading.Thread(target=install_requirements, args=(main_file,)).start()
                 
                 # تشغيل الملف
                 proc = subprocess.Popen(["python3", main_file])
@@ -1224,8 +1247,11 @@ def handle_file(message):
         user_id in premium_users or 
         allow_all_uploads):
         
-        # معالجة الملف مباشرة دون موافقة
-        process_file_without_approval(user_id, file_name, file_data, waiting_msg.message_id)
+        # بدء معالجة الملف في خيط منفصل
+        threading.Thread(
+            target=process_file_without_approval, 
+            args=(user_id, file_name, file_data, waiting_msg.message_id)
+        ).start()
         log_activity(user_id, "رفع ملف مباشر", f"ملف: {file_name}")
     else:
         # حفظ الملف في قائمة الانتظار
@@ -1312,7 +1338,7 @@ def handle_callback(call):
                     file_actions(call)
                     log_activity(chat_id, "تشغيل ملف", f"ملف: {file_info['file_name']}")
                 else:
-                    bot.answer_callback_query(call.id, "⚠️ لا يمكن تش��يل هذا النوع من الملفات.")
+                    bot.answer_callback_query(call.id, "⚠️ لا يمكن تشغيل هذا النوع من الملفات.")
             else:
                 bot.answer_callback_query(call.id, "⚠️ الملف قيد التشغيل بالفعل.")
         else:
