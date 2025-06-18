@@ -462,7 +462,12 @@ telebot
 requests
 python-dotenv
     """
-    bot.send_message(call.message.chat.id, help_text, parse_mode="Markdown")
+    
+    # إضافة زر العودة أسفل قائمة المساعدة
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("العودة إلى الواجهة الرئيسية", callback_data='back_to_main'))
+    
+    bot.send_message(call.message.chat.id, help_text, parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
@@ -722,7 +727,7 @@ def process_broadcast(message):
             sent += 1
         except:
             failed += 1
-        time.sleep(0.1)  # تجنب حظ�� التليجرام
+        time.sleep(0.1)  # تجنب حظر التليجرام
     
     bot.reply_to(message, f"✅ تمت الإذاعة بنجاح:\n- تم الإرسال: {sent}\n- فشل: {failed}\n- الإجمالي: {total}")
     log_activity(message.from_user.id, "إرسال إذاعة", f"تم الإرسال: {sent}, فشل: {failed}")
@@ -867,7 +872,7 @@ def process_view_user_files(message):
         response = "\n".join(files_info)
         bot.reply_to(message, f"📂 ملفات المستخدم {user_id}:\n{response}")
     except:
-        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
+        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رق��ًا")
 
 def process_delete_user_file(message):
     """حذف ملف مستخدم"""
@@ -989,7 +994,7 @@ def process_search_user(message):
         response = f"""
 🔍 *معلومات المستخدم*:
 
-- 🆔 الآيدي: `{user_id}`
+- 🆔 ال��يدي: `{user_id}`
 - 🚫 محظور: {is_banned}
 - ⭐ Premium: {is_premium}
 - 📂 عدد الملفات: {num_files}
@@ -1574,7 +1579,7 @@ def keepalive():
 if __name__ == "__main__":
     # إعداد Webhook
     bot.remove_webhook()
-    bot.set_webhook(url=f"https://zil-1.onrender.com/{TOKEN}")  # ✅ عدّل الرابط حسب رابط تطبيقك
+    bot.set_webhook(url=f"https://zil-xz70.onrender.com/{TOKEN}")  # ✅ عدّل الرابط حسب رابط تطبيقك
 
     load_data()  # تحميل البيانات المحفوظة
 
