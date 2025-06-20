@@ -322,7 +322,7 @@ def process_and_run_file(user_id, file_name, file_data):
             # تثبيت المتطلبات
             install_requirements(temp_path)
             
-            # تشغيل الملف
+            # تشغيل الملف بشكل دائم
             proc = subprocess.Popen(["python3", temp_path])
             user_files[user_id][file_key]['process'] = proc
             
@@ -375,7 +375,7 @@ def process_and_run_file(user_id, file_name, file_data):
                 # تثبيت المتطلبات
                 install_requirements(main_file)
                 
-                # تشغيل الملف
+                # تشغيل الملف بشكل دائم
                 proc = subprocess.Popen(["python3", main_file])
                 user_files[user_id][file_key]['process'] = proc
                 
@@ -526,7 +526,8 @@ def generate_admin_markup():
         types.InlineKeyboardButton("❌ إزالة Premium", callback_data='admin_remove_premium'),
         types.InlineKeyboardButton("✅ سماح للكل", callback_data='admin_allow_all'),
         types.InlineKeyboardButton("❌ رفض الكل", callback_data='admin_deny_all'),
-        types.InlineKeyboardButton("🔐 إعدادات الرفع", callback_data='admin_upload_settings')
+        types.InlineKeyboardButton("🔐 إعدادات الرفع", callback_data='admin_upload_settings'),
+        types.InlineKeyboardButton("🗑️ حذف جميع الملفات المعلقة", callback_data='admin_delete_all_pending')  # زر جديد
     ]
     
     # إضافة الأزرار في مجموعات
@@ -642,6 +643,13 @@ def handle_admin_callback(call):
     
     elif data == 'admin_upload_settings':
         show_upload_settings(call)
+    
+    # معالجة زر حذف جميع الملفات المعلقة
+    elif data == 'admin_delete_all_pending':
+        count = len(pending_files)
+        pending_files.clear()
+        bot.answer_callback_query(call.id, f"✅ تم حذف {count} ملف معلق")
+        log_activity(user_id, "حذف جميع الملفات المعلقة", f"عدد: {count}")
     
     # إضافة معالجة للزر العودة في لوحة الأدمن
     elif data == 'admin_back':
@@ -872,7 +880,7 @@ def process_view_user_files(message):
         response = "\n".join(files_info)
         bot.reply_to(message, f"📂 ملفات المستخدم {user_id}:\n{response}")
     except:
-        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رق��ًا")
+        bot.reply_to(message, "❌ آيدي غير صالح. يجب أن يكون رقمًا")
 
 def process_delete_user_file(message):
     """حذف ملف مستخدم"""
@@ -994,7 +1002,7 @@ def process_search_user(message):
         response = f"""
 🔍 *معلومات المستخدم*:
 
-- 🆔 ال��يدي: `{user_id}`
+- 🆔 الآيدي: `{user_id}`
 - 🚫 محظور: {is_banned}
 - ⭐ Premium: {is_premium}
 - 📂 عدد الملفات: {num_files}
@@ -1266,6 +1274,20 @@ def handle_file(message):
 
     # التحقق من صلاحيات الرفع
     user_id = message.chat.id
+    
+    # معالجة خاصة للأدمن: رفع مباشر بدون موافقة
+    if user_id in admin_users:
+        update_progress_bar(
+            user_id,
+            waiting_msg.message_id,
+            process_and_run_file,
+            user_id,
+            file_name,
+            file_data
+        )
+        return
+
+    # التحقق من صلاحيات الرفع للمستخدمين العاديين
     if upload_settings['global'] == 'allow_all':
         # السماح للكل بدون موافقة
         update_progress_bar(
@@ -1388,7 +1410,7 @@ def handle_callback(call):
                     temp_path = create_temp_file(file_info['content'], '.py')
                     file_info['temp_path'] = temp_path
                     
-                    # تشغيل الملف
+                    # تشغيل الملف بشكل دائم
                     proc = subprocess.Popen(["python3", temp_path])
                     file_info['process'] = proc
                     bot.answer_callback_query(call.id, f"▶️ تم تشغيل {file_info['file_name']}")
