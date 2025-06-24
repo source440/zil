@@ -17,21 +17,28 @@ from collections import defaultdict
 import io
 from flask import Flask, request
 import math
+import base64
+from github import Github
 
 # إعداد التوكن وإنشاء البوت وFlask app
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
+# إعدادات GitHub
+GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
+GITHUB_REPO_NAME = os.getenv('GITHUB_REPO_NAME', 'user_bots_repo')
+GITHUB_USERNAME = os.getenv('GITHUB_USERNAME')
+
 # آيدي المطور من متغير البيئة
 admin_id = int(os.getenv('ADMIN_ID', '7384683084'))
 
 # تخزين العمليات والملفات
-user_files = {}  # {chat_id: {file_key: {'process': Popen, 'content': bytes, 'file_name': str, 'temp_path': str}}}
+user_files = {}  # {chat_id: {file_key: {'process': Popen, 'github_path': str, 'file_name': str, 'temp_path': str}}}
 pending_files = {}  # {pending_key: {'user_id': int, 'file_name': str, 'file_data': bytes, 'message_id': int}}
 banned_users = set()
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-MAX_MEMORY_USAGE = 300 * 1024 * 1024  # 300MB كحد أقصى لاستخدام الذاكرة
+MAX_MEMORY_USAGE = 500 * 1024 * 1024  # 500MB كحد أقصى لاستخدام الذاكرة (تم زيادتها)
 
 # تخزين بيانات الأدمن
 admin_users = {admin_id}  # مجموعة من آيدي الأدمن
@@ -55,6 +62,158 @@ live_monitoring = False  # حالة المراقبة المباشرة
 # تخزين بيانات المستخدمين في ملف
 DATA_FILE = "bot_data.json"
 
+# متغير لحفظ كائن المستودع
+github_repo = None
+
+# ===== وظائف جديدة مضافة =====
+def bot_monitor():
+    """مراقبة البوتات وإعادة تشغيلها إذا توقفت"""
+    while True:
+        try:
+            for user_id, files in list(user_files.items()):
+                for file_key, file_info in list(files.items()):
+                    # تخطي الملفات التي تم إيقافها يدوياً
+                    if file_info.get('manually_stopped', False):
+                        continue
+                        
+                    if file_info['file_name'].endswith('.py'):
+                        proc = file_info.get('process')
+                        # إذا كانت العملية موجودة وقد انتهت ولم يتم إيقافها يدوياً
+                        if proc and proc.poll() is not None:
+                            print(f"إعادة تشغيل بوت توقف: {file_info['file_name']}")
+                            
+                            # إعادة تحميل المحتوى من GitHub
+                            file_content = download_from_github(file_info['github_path'])
+                            if file_content is None:
+                                continue
+                            
+                            # إنشاء ملف مؤقت جديد
+                            temp_path = create_temp_file(file_content, '.py')
+                            file_info['temp_path'] = temp_path
+                            
+                            # إعادة التشغيل
+                            new_proc = run_bot_process(temp_path)
+                            file_info['process'] = new_proc
+                            
+            # انتظر دقيقة قبل الفحص التالي
+            time.sleep(60)
+        except Exception as e:
+            print(f"خطأ في المراقب: {str(e)}")
+            # إرسال إخطار للأدمن
+            for admin in admin_users:
+                try:
+                    bot.send_message(admin, f"⚠️ خطأ في مراقب البوتات:\n{str(e)}")
+                except:
+                    pass
+            time.sleep(30)
+
+def memory_cleaner():
+    """تنظيف الذاكرة التلقائي"""
+    while True:
+        try:
+            current_usage = get_memory_usage()
+            if current_usage > MAX_MEMORY_USAGE * 0.8:  # إذا تجاوز 80%
+                # حذف أقدم ملف غير نشط
+                for user_id, files in list(user_files.items()):
+                    for file_key, file_info in list(files.items()):
+                        if file_info.get('process') and file_info['process'].poll() is not None:
+                            delete_bot_file(user_id, file_key)
+                            print(f"تنظيف الذاكرة: حذف {file_info['file_name']}")
+                            break
+        except Exception as e:
+            print(f"خطأ في منظف الذاكرة: {str(e)}")
+        time.sleep(60 * 30)  # كل 30 دقيقة
+
+def run_bot_process(temp_path):
+    """تشغيل البوت مع تسجيل الأخطاء"""
+    log_file_path = f"{temp_path}.log"
+    try:
+        with open(log_file_path, 'w') as log_file:
+            return subprocess.Popen(
+                ["python3", temp_path],
+                stdout=log_file,
+                stderr=log_file
+            )
+    except Exception as e:
+        print(f"فشل تشغيل البوت: {str(e)}")
+        return None
+
+# ===== وظائف GitHub =====
+def init_github_repo():
+    """تهيئة المستودع على GitHub"""
+    global github_repo
+    try:
+        g = Github(GITHUB_TOKEN)
+        user = g.get_user()
+        try:
+            github_repo = user.get_repo(GITHUB_REPO_NAME)
+            print(f"تم تحميل المستودع: {github_repo.name}")
+        except:
+            github_repo = user.create_repo(GITHUB_REPO_NAME, private=True)
+            print(f"تم إنشاء مستودع جديد: {github_repo.name}")
+        return github_repo
+    except Exception as e:
+        print(f"خطأ في تهيئة GitHub: {str(e)}")
+        return None
+
+def upload_to_github(file_name, content, user_id):
+    """رفع ملف إلى مستودع GitHub"""
+    try:
+        if not github_repo:
+            init_github_repo()
+            if not github_repo:
+                return None
+        
+        # إنشاء مسار فريد للملف
+        file_path = f"user_{user_id}/{uuid.uuid4().hex}_{file_name}"
+        
+        # رفع الملف
+        github_repo.create_file(
+            path=file_path,
+            message=f"رفع بواسطة المستخدم: {user_id}",
+            content=content,
+            branch="main"
+        )
+        
+        return file_path
+    except Exception as e:
+        print(f"فشل الرفع إلى GitHub: {str(e)}")
+        return None
+
+def download_from_github(file_path):
+    """تنزيل ملف من مستودع GitHub"""
+    try:
+        if not github_repo:
+            init_github_repo()
+            if not github_repo:
+                return None
+        
+        file = github_repo.get_contents(file_path)
+        return base64.b64decode(file.content)
+    except Exception as e:
+        print(f"فشل التنزيل من GitHub: {str(e)}")
+        return None
+
+def delete_from_github(file_path):
+    """حذف ملف من مستودع GitHub"""
+    try:
+        if not github_repo:
+            init_github_repo()
+            if not github_repo:
+                return False
+        
+        file = github_repo.get_contents(file_path)
+        github_repo.delete_file(
+            path=file_path,
+            message=f"حذف الملف",
+            sha=file.sha
+        )
+        return True
+    except Exception as e:
+        print(f"فشل الحذف من GitHub: {str(e)}")
+        return False
+
+# ===== وظائف النظام الأساسية =====
 def save_data():
     """حفظ بيانات البوت في ملف"""
     data = {
@@ -177,12 +336,12 @@ def install_requirements(path):
         print(f"فشل التثبيت التلقائي: {e}")
 
 def get_memory_usage():
-    """الحصول على إجمالي استخدام الذاكرة للملفات"""
+    """الحصول على إجمالي استخدام الذاكرة للملفات المؤقتة فقط"""
     total = 0
     for user_id, files in user_files.items():
         for file_key, file_info in files.items():
-            if 'content' in file_info:
-                total += len(file_info['content'])
+            if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
+                total += os.path.getsize(file_info['temp_path'])
     return total
 
 def check_memory_available(additional_size):
@@ -303,28 +462,42 @@ def process_and_run_file(user_id, file_name, file_data):
     
     try:
         if file_name.endswith(".py"):
+            # تحويل المحتوى إلى نص لرفعه على GitHub
+            try:
+                content_str = file_data.decode('utf-8')
+            except UnicodeDecodeError:
+                # إذا كان الملف ثنائي، نستخدم base64
+                content_str = base64.b64encode(file_data).decode('utf-8')
+            
+            # رفع الملف إلى GitHub
+            github_path = upload_to_github(file_name, content_str, user_id)
+            
+            if not github_path:
+                return False, "❌ فشل في حفظ الملف على GitHub", None, None
+            
             if user_id not in user_files:
                 user_files[user_id] = {}
             
-            user_files[user_id][file_key] = {
-                'file_name': file_name,
-                'content': file_data,
-                'process': None
-            }
-            
-            # تحديث إحصائيات الذاكرة
-            user_stats['memory_usage'] += len(file_data)
-            
             # إنشاء ملف مؤقت للتشغيل
             temp_path = create_temp_file(file_data, '.py')
-            user_files[user_id][file_key]['temp_path'] = temp_path
             
             # تثبيت المتطلبات
             install_requirements(temp_path)
             
             # تشغيل الملف بشكل دائم
-            proc = subprocess.Popen(["python3", temp_path])
-            user_files[user_id][file_key]['process'] = proc
+            proc = run_bot_process(temp_path)
+            
+            if proc is None:
+                return False, "❌ فشل في تشغيل الملف", None, None
+            
+            # حفظ المعلومات
+            user_files[user_id][file_key] = {
+                'file_name': file_name,
+                'github_path': github_path,
+                'process': proc,
+                'temp_path': temp_path,
+                'manually_stopped': False  # تم إضافته
+            }
             
             message = f"✅ تم رفع وتشغيل ملفك `{file_name}` بنجاح."
             file_info = user_files[user_id][file_key]
@@ -340,44 +513,73 @@ def process_and_run_file(user_id, file_name, file_data):
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(temp_dir)
             
-            # البحث عن ملفات البايثون الرئيسية
-            py_files = [f for f in os.listdir(temp_dir) if f.endswith('.py')]
+            # البحث عن ملفات البايثون في جميع المجلدات
+            py_files = []
+            for root, _, files in os.walk(temp_dir):
+                for file in files:
+                    if file.endswith('.py'):
+                        py_files.append(os.path.join(root, file))
+            
             main_file = None
             
             # محاولة العثور على ملف رئيسي
             for candidate in ['main.py', 'bot.py', 'start.py', 'app.py']:
-                if candidate in py_files:
-                    main_file = os.path.join(temp_dir, candidate)
+                for py_file in py_files:
+                    if os.path.basename(py_file).lower() == candidate:
+                        main_file = py_file
+                        break
+                if main_file:
                     break
             
             # إذا لم يتم العثور، استخدام أول ملف بايثون
             if not main_file and py_files:
-                main_file = os.path.join(temp_dir, py_files[0])
+                main_file = py_files[0]
             
             if main_file:
                 # قراءة محتوى الملف الرئيسي
                 with open(main_file, 'rb') as f:
                     main_content = f.read()
                 
+                # تحويل المحتوى إلى نص لرفعه على GitHub
+                try:
+                    content_str = main_content.decode('utf-8')
+                except UnicodeDecodeError:
+                    content_str = base64.b64encode(main_content).decode('utf-8')
+                
+                # رفع الملف إلى GitHub
+                github_path = upload_to_github(os.path.basename(main_file), content_str, user_id)
+                
+                if not github_path:
+                    return False, "❌ فشل في حفظ الملف على GitHub", None, None
+                
                 if user_id not in user_files:
                     user_files[user_id] = {}
                 
-                user_files[user_id][file_key] = {
-                    'file_name': os.path.basename(main_file),
-                    'content': main_content,
-                    'process': None,
-                    'temp_dir': temp_dir  # تخزين المسار لحذفه لاحقاً
-                }
+                # إنشاء ملف مؤقت للتشغيل
+                temp_path = create_temp_file(main_content, '.py')
                 
-                # تحديث إحصائيات الذاكرة
-                user_stats['memory_usage'] += len(main_content)
-                
-                # تثبيت المتطلبات
-                install_requirements(main_file)
+                # تثبيت المتطلبات من الملفات المضغوطة
+                for root, _, files in os.walk(temp_dir):
+                    if 'requirements.txt' in files:
+                        requirements_path = os.path.join(root, 'requirements.txt')
+                        print(f"تم العثور على ملف المتطلبات: {requirements_path}")
+                        subprocess.call(['pip', 'install', '-r', requirements_path])
                 
                 # تشغيل الملف بشكل دائم
-                proc = subprocess.Popen(["python3", main_file])
-                user_files[user_id][file_key]['process'] = proc
+                proc = run_bot_process(temp_path)
+                
+                if proc is None:
+                    return False, "❌ فشل في تشغيل الملف", None, None
+                
+                # حفظ المعلومات
+                user_files[user_id][file_key] = {
+                    'file_name': os.path.basename(main_file),
+                    'github_path': github_path,
+                    'process': proc,
+                    'temp_path': temp_path,
+                    'temp_dir': temp_dir,  # تخزين المسار لحذفه لاحقاً
+                    'manually_stopped': False  # تم إضافته
+                }
                 
                 message = f"✅ تم رفع وتشغيل الملف الرئيسي `{os.path.basename(main_file)}` من الأرشيف بنجاح."
                 file_info = user_files[user_id][file_key]
@@ -397,6 +599,87 @@ def process_and_run_file(user_id, file_name, file_data):
         message = f"❌ فشل في معالجة الملف `{file_name}`: {str(e)}"
     
     return success, message, file_info, file_key
+
+def restart_all_bots_from_github():
+    """إعادة تشغيل جميع البوتات من مستودع GitHub"""
+    if not github_repo:
+        init_github_repo()
+        if not github_repo:
+            print("❌ فشل في تهيئة GitHub")
+            return
+    
+    print("جاري إعادة تشغيل البوتات من GitHub...")
+    
+    try:
+        # الحصول على جميع المجلدات في المستودع
+        contents = github_repo.get_contents("")
+        user_folders = [c for c in contents if c.type == "dir" and c.path.startswith("user_")]
+        
+        for folder in user_folders:
+            user_id = int(folder.path.replace("user_", ""))
+            bot_files = github_repo.get_contents(folder.path)
+            
+            for bot_file in bot_files:
+                if bot_file.name.endswith('.py'):
+                    # تنزيل المحتوى
+                    file_content = base64.b64decode(bot_file.content)
+                    
+                    # إنشاء ملف مؤقت
+                    temp_path = create_temp_file(file_content, '.py')
+                    
+                    # تثبيت المتطلبات
+                    install_requirements(temp_path)
+                    
+                    # تشغيل البوت
+                    proc = run_bot_process(temp_path)
+                    
+                    if proc is None:
+                        continue
+                    
+                    # تخزين المعلومات
+                    file_key = str(uuid.uuid4())[:8]
+                    
+                    if user_id not in user_files:
+                        user_files[user_id] = {}
+                    
+                    user_files[user_id][file_key] = {
+                        'file_name': bot_file.name,
+                        'github_path': bot_file.path,
+                        'process': proc,
+                        'temp_path': temp_path,
+                        'manually_stopped': False  # تم إضافته
+                    }
+                    
+                    print(f"تم إعادة تشغيل بوت: {bot_file.name} للمستخدم {user_id}")
+    except Exception as e:
+        print(f"خطأ في إعادة التشغيل من GitHub: {str(e)}")
+        # إعادة المحاولة بعد 10 ثواني
+        time.sleep(10)
+        restart_all_bots_from_github()
+
+def delete_bot_file(user_id, file_key):
+    """حذف ملف البوت مع حذفه من GitHub"""
+    if user_id in user_files and file_key in user_files[user_id]:
+        file_info = user_files[user_id].pop(file_key)
+        
+        # إيقاف العملية إن كانت نشطة
+        if file_info.get('process') and file_info['process'].poll() is None:
+            file_info['process'].terminate()
+        
+        # حذف الملف المؤقت
+        if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
+            os.unlink(file_info['temp_path'])
+        
+        # حذف المجلد المؤقت إن وجد
+        if 'temp_dir' in file_info and os.path.exists(file_info['temp_dir']):
+            shutil.rmtree(file_info['temp_dir'], ignore_errors=True)
+        
+        # حذف الملف من GitHub
+        if 'github_path' in file_info:
+            delete_from_github(file_info['github_path'])
+        
+        return True
+    return False
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -474,7 +757,7 @@ def admin_panel(message):
     load_data()  # تأكد من تحميل أحدث البيانات
     user_id = message.from_user.id
     if user_id not in admin_users:
-        bot.reply_to(message, "⛔ ليس لديك صلاحية الوصول إلى لوحة الأدمن.")
+        bot.reply_to(message, "أنت لست أدمن 🙃")
         return
     
     log_activity(user_id, "فتح لوحة الأدمن")
@@ -527,7 +810,7 @@ def generate_admin_markup():
         types.InlineKeyboardButton("✅ سماح للكل", callback_data='admin_allow_all'),
         types.InlineKeyboardButton("❌ رفض الكل", callback_data='admin_deny_all'),
         types.InlineKeyboardButton("🔐 إعدادات الرفع", callback_data='admin_upload_settings'),
-        types.InlineKeyboardButton("🗑️ حذف جميع الملفات المعلقة", callback_data='admin_delete_all_pending')  # زر جديد
+        types.InlineKeyboardButton("🗑️ حذف جميع الملفات المعلقة", callback_data='admin_delete_all_pending')
     ]
     
     # إضافة الأزرار في مجموعات
@@ -780,12 +1063,13 @@ def process_test_user_bot(message):
                     file_info['process'].terminate()
                 
                 # إنشاء ملف مؤقت
-                temp_path = create_temp_file(file_info['content'], '.py')
+                temp_path = create_temp_file(download_from_github(file_info['github_path']), '.py')
                 file_info['temp_path'] = temp_path
                 
                 # تشغيل الملف
-                proc = subprocess.Popen(["python3", temp_path])
+                proc = run_bot_process(temp_path)
                 file_info['process'] = proc
+                file_info['manually_stopped'] = False  # تم إضافته
         
         bot.reply_to(message, f"✅ تم اختبار وإعادة تشغيل بوتات المستخدم {user_id}")
         log_activity(message.from_user.id, "اختبار بوت مستخدم", f"ID: {user_id}")
@@ -808,12 +1092,13 @@ def process_restart_user_bot(message):
                     time.sleep(1)
                 
                 # إنشاء ملف مؤقت
-                temp_path = create_temp_file(file_info['content'], '.py')
+                temp_path = create_temp_file(download_from_github(file_info['github_path']), '.py')
                 file_info['temp_path'] = temp_path
                 
                 # تشغيل الملف
-                proc = subprocess.Popen(["python3", temp_path])
+                proc = run_bot_process(temp_path)
                 file_info['process'] = proc
+                file_info['manually_stopped'] = False  # تم إضافته
         
         bot.reply_to(message, f"✅ تم إعادة تشغيل بوتات المستخدم {user_id}")
         log_activity(message.from_user.id, "إعادة تشغيل بوت مستخدم", f"ID: {user_id}")
@@ -836,6 +1121,7 @@ def process_stop_user_bot(message):
                 if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
                     os.unlink(file_info['temp_path'])
                     del file_info['temp_path']
+                file_info['manually_stopped'] = True  # تم إضافته
         
         bot.reply_to(message, f"✅ تم إيقاف بوتات المستخدم {user_id}")
         log_activity(message.from_user.id, "إيقاف بوت مستخدم", f"ID: {user_id}")
@@ -853,12 +1139,13 @@ def restart_all_bots(chat_id):
                     time.sleep(1)
                 
                 # إنشاء ملف مؤقت
-                temp_path = create_temp_file(file_info['content'], '.py')
+                temp_path = create_temp_file(download_from_github(file_info['github_path']), '.py')
                 file_info['temp_path'] = temp_path
                 
                 # تشغيل الملف
-                proc = subprocess.Popen(["python3", temp_path])
+                proc = run_bot_process(temp_path)
                 file_info['process'] = proc
+                file_info['manually_stopped'] = False  # تم إضافته
                 count += 1
     
     bot.send_message(chat_id, f"✅ تم إعادة تشغيل {count} بوت بنجاح")
@@ -901,20 +1188,7 @@ def process_delete_user_file(message):
         deleted = False
         for file_key, file_info in list(user_files[user_id].items()):
             if file_info['file_name'] == file_name:
-                # إيقاف العملية إن كانت نشطة
-                if file_info['process'] and file_info['process'].poll() is None:
-                    file_info['process'].terminate()
-                
-                # حذف الملف المؤقت إن وجد
-                if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
-                    os.unlink(file_info['temp_path'])
-                if 'temp_dir' in file_info and os.path.exists(file_info['temp_dir']):
-                    shutil.rmtree(file_info['temp_dir'], ignore_errors=True)
-                
-                # حذف المحتوى من الذاكرة
-                file_size = len(file_info['content'])
-                del user_files[user_id][file_key]
-                user_stats['memory_usage'] -= file_size
+                delete_bot_file(user_id, file_key)
                 deleted = True
                 break
         
@@ -1228,6 +1502,55 @@ def reject_file(call):
     bot.send_message(call.message.chat.id, f"❌ تم رفض ملف `{file_name}` للمستخدم {user_id}", parse_mode="Markdown")
     log_activity(call.from_user.id, "رفض ملف", f"المستخدم: {user_id}, ملف: {file_name}")
 
+# ===== معالجة الملفات مع الزرين الجديدين =====
+@bot.callback_query_handler(func=lambda call: call.data == 'delete_all_files')
+def delete_all_user_files(call):
+    chat_id = call.message.chat.id
+    if chat_id not in user_files or not user_files[chat_id]:
+        bot.answer_callback_query(call.id, "⚠️ ليس لديك أي ملفات لحذفها.")
+        return
+    
+    count = 0
+    for file_key in list(user_files[chat_id].keys()):
+        if delete_bot_file(chat_id, file_key):
+            count += 1
+    
+    if count > 0:
+        bot.answer_callback_query(call.id, f"✅ تم حذف {count} ملف")
+        # تحديث الواجهة
+        show_user_files(call)
+        log_activity(chat_id, "حذف جميع الملفات", f"عدد: {count}")
+    else:
+        bot.answer_callback_query(call.id, "⚠️ لم يتم حذف أي ملف")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'stop_all_files')
+def stop_all_user_files(call):
+    chat_id = call.message.chat.id
+    if chat_id not in user_files or not user_files[chat_id]:
+        bot.answer_callback_query(call.id, "⚠️ ليس لديك أي ملفات نشطة.")
+        return
+    
+    count = 0
+    for file_key, file_info in user_files[chat_id].items():
+        if file_info.get('process') and file_info['process'].poll() is None:
+            file_info['process'].terminate()
+            file_info['manually_stopped'] = True
+            
+            # حذف الملف المؤقت
+            if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
+                os.unlink(file_info['temp_path'])
+                del file_info['temp_path']
+            
+            count += 1
+    
+    if count > 0:
+        bot.answer_callback_query(call.id, f"⏹️ تم إيقاف {count} ملف نشط")
+        # تحديث الواجهة
+        show_user_files(call)
+        log_activity(chat_id, "إيقاف جميع الملفات", f"عدد: {count}")
+    else:
+        bot.answer_callback_query(call.id, "⚠️ لا توجد ملفات نشطة لإيقافها")
+
 @bot.message_handler(content_types=['document'])
 def handle_file(message):
     if bot_locked:
@@ -1384,6 +1707,7 @@ def handle_callback(call):
             file_info = user_files[chat_id][file_key]
             if file_info['process'] and file_info['process'].poll() is None:
                 file_info['process'].terminate()
+                file_info['manually_stopped'] = True  # تم إضافته
                 
                 # حذف الملف المؤقت
                 if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
@@ -1406,13 +1730,20 @@ def handle_callback(call):
             file_info = user_files[chat_id][file_key]
             if file_info['process'] is None or file_info['process'].poll() is not None:
                 if file_info['file_name'].endswith('.py'):
+                    # تنزيل المحتوى من GitHub
+                    file_content = download_from_github(file_info['github_path'])
+                    if file_content is None:
+                        bot.answer_callback_query(call.id, "❌ فشل في تحميل الملف من GitHub")
+                        return
+                    
                     # إنشاء ملف مؤقت جديد
-                    temp_path = create_temp_file(file_info['content'], '.py')
+                    temp_path = create_temp_file(file_content, '.py')
                     file_info['temp_path'] = temp_path
                     
                     # تشغيل الملف بشكل دائم
-                    proc = subprocess.Popen(["python3", temp_path])
+                    proc = run_bot_process(temp_path)
                     file_info['process'] = proc
+                    file_info['manually_stopped'] = False  # تم إضافته
                     bot.answer_callback_query(call.id, f"▶️ تم تشغيل {file_info['file_name']}")
                     # تحديث الواجهة
                     file_actions(call)
@@ -1427,27 +1758,11 @@ def handle_callback(call):
     # معالجة طلبات الحذف
     elif data.startswith('delete_'):
         file_key = data.split('_')[1]
-        if chat_id in user_files and file_key in user_files[chat_id]:
-            file_info = user_files[chat_id].pop(file_key)
-            
-            # إيقاف العملية إن كانت نشطة
-            if file_info['process'] and file_info['process'].poll() is None:
-                file_info['process'].terminate()
-                
-            # حذف الملفات المؤقتة
-            if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
-                os.unlink(file_info['temp_path'])
-            if 'temp_dir' in file_info and os.path.exists(file_info['temp_dir']):
-                shutil.rmtree(file_info['temp_dir'], ignore_errors=True)
-                
-            # تحديث إحصائيات الذاكرة
-            if 'content' in file_info:
-                user_stats['memory_usage'] -= len(file_info['content'])
-            
-            bot.answer_callback_query(call.id, f"🗑️ تم حذف {file_info['file_name']}")
+        if delete_bot_file(chat_id, file_key):
+            bot.answer_callback_query(call.id, f"🗑️ تم حذف الملف")
             # العودة لقائمة الملفات
             show_user_files(call)
-            log_activity(chat_id, "حذف ملف", f"ملف: {file_info['file_name']}")
+            log_activity(chat_id, "حذف ملف")
         else:
             bot.answer_callback_query(call.id, "❌ الملف غير موجود أو تم حذفه مسبقاً.")
 
@@ -1457,10 +1772,16 @@ def handle_callback(call):
         if chat_id in user_files and file_key in user_files[chat_id]:
             file_info = user_files[chat_id][file_key]
             try:
-                # إرسال الملف من محتواه في الذاكرة
+                # تنزيل المحتوى من GitHub
+                file_content = download_from_github(file_info['github_path'])
+                if file_content is None:
+                    bot.answer_callback_query(call.id, "❌ فشل في تحميل الملف من GitHub")
+                    return
+                
+                # إرسال الملف
                 bot.send_document(
                     chat_id, 
-                    io.BytesIO(file_info['content']), 
+                    io.BytesIO(file_content), 
                     visible_file_name=file_info['file_name'],
                     caption=f"📥 {file_info['file_name']}"
                 )
@@ -1495,6 +1816,20 @@ def show_user_files(call):
         return
     
     markup = types.InlineKeyboardMarkup()
+    
+    # أزرار التحكم الجماعية
+    control_buttons = []
+    if user_files[chat_id]:
+        # زر إيقاف جميع الملفات النشطة
+        control_buttons.append(types.InlineKeyboardButton("⏹️ ايقاف جميع الملفات", callback_data="stop_all_files"))
+        # زر حذف جميع الملفات
+        control_buttons.append(types.InlineKeyboardButton("🗑️ حذف جميع الملفات", callback_data="delete_all_files"))
+    
+    # إضافة الأزرار في صف واحد إذا كان هناك ملفات
+    if control_buttons:
+        markup.row(*control_buttons)
+    
+    # إدراج ملفات المستخدم
     for file_key, file_info in user_files[chat_id].items():
         file_name = file_info['file_name']
         status = "🟢 قيد التشغيل" if file_info.get('process') and file_info['process'].poll() is None else "🔴 متوقف"
@@ -1528,30 +1863,44 @@ def file_actions(call):
     file_info = user_files[chat_id][file_key]
     file_name = file_info['file_name']
     status = "🟢 قيد التشغيل" if file_info['process'] and file_info['process'].poll() is None else "🔴 متوقف"
-    file_size = len(file_info.get('content', b'')) / 1024  # حجم الملف بالكيلوبايت
+    
+    # تحسين التنسيق لعرض معلومات الملف
+    file_details = (
+        f"⚙️ *تحكم في الملف*\n\n"
+        f"📄 اسم الملف: `{file_name}`\n"
+        f"🔧 الحالة: {status}\n"
+    )
+    
+    # إضافة معلومات إضافية إن وجدت
+    if 'github_path' in file_info:
+        file_details += f"🌐 مسار GitHub: `{file_info['github_path']}`\n"
+    
+    if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
+        file_size = os.path.getsize(file_info['temp_path']) / 1024  # حجم الملف بالكيلوبايت
+        file_details += f"📏 حجم الملف: {file_size:.2f} KB\n"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     
-    # عرض خيارات التشغيل فقط لملفات البايثون
+    # خيارات خاصة لملفات البايثون
     if file_info['file_name'].endswith('.py'):
         if file_info['process'] and file_info['process'].poll() is None:
             markup.add(types.InlineKeyboardButton("⏹️ إيقاف التشغيل", callback_data=f"stop_{file_key}"))
         else:
             markup.add(types.InlineKeyboardButton("▶️ تشغيل الملف", callback_data=f"run_{file_key}"))
     
-    markup.add(
+    # أزرار التحكم العامة
+    markup.row(
         types.InlineKeyboardButton("🗑️ حذف الملف", callback_data=f"delete_{file_key}"),
-        types.InlineKeyboardButton("📥 تنزيل الملف", callback_data=f"download_{file_key}"),
-        types.InlineKeyboardButton("العودة ←", callback_data='my_files')
+        types.InlineKeyboardButton("📥 تنزيل الملف", callback_data=f"download_{file_key}")
     )
+    
+    # زر العودة
+    markup.add(types.InlineKeyboardButton("↩️ العودة إلى ملفاتي", callback_data='my_files'))
     
     bot.edit_message_text(
         chat_id=chat_id,
         message_id=call.message.message_id,
-        text=f"⚙️ *تحكم في الملف*:\n"
-             f"اسم الملف: `{file_name}`\n"
-             f"الحالة: {status}\n"
-             f"الحجم: {file_size:.2f} KB",
+        text=file_details,
         parse_mode="Markdown",
         reply_markup=markup
     )
@@ -1585,6 +1934,7 @@ def back_to_main(call):
         text=start_message,
         reply_markup=markup
     )
+
 # نقطة النهاية التي تستقبل التحديثات من Telegram
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook():
@@ -1604,6 +1954,28 @@ if __name__ == "__main__":
     bot.set_webhook(url=f"https://zil-xz70.onrender.com/{TOKEN}")  # ✅ عدّل الرابط حسب رابط تطبيقك
 
     load_data()  # تحميل البيانات المحفوظة
+    
+    # تهيئة GitHub
+    init_github_repo()
+    
+    # إعادة تشغيل البوتات المحفوظة
+    restart_all_bots_from_github()
+    
+    # بدء خدمات المراقبة والإدارة
+    threading.Thread(target=bot_monitor, daemon=True).start()
+    threading.Thread(target=memory_cleaner, daemon=True).start()
+    
+    # إضافة وظيفة Keep-Alive
+    def keep_alive():
+        while True:
+            try:
+                requests.get("https://zil-xz70.onrender.com/keepalive")
+                print("تم إرسال طلب Keep-Alive")
+            except Exception as e:
+                print(f"خطأ في Keep-Alive: {str(e)}")
+            time.sleep(180)  # كل 3 دقائق
+    
+    threading.Thread(target=keep_alive, daemon=True).start()
 
     print("🚀 Bot is running with Webhook...")
 
