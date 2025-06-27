@@ -1951,7 +1951,7 @@ def keepalive():
 if __name__ == "__main__":
     # إعداد Webhook
     bot.remove_webhook()
-    bot.set_webhook(url=f"https://zil-5dkp.onrender.com/{TOKEN}")  # ✅ عدّل الرابط حسب رابط تطبيقك
+    bot.set_webhook(url=f"https://zil-bmpd.onrender.com/{TOKEN}")  # ✅ عدّل الرابط حسب رابط تطبيقك
 
     load_data()  # تحميل البيانات المحفوظة
     
@@ -1969,7 +1969,7 @@ if __name__ == "__main__":
     def keep_alive():
         while True:
             try:
-                requests.get("https://zil-5dkp.onrender.com/keepalive")
+                requests.get("https://zil-bmpd.onrender.com/keepalive")
                 print("تم إرسال طلب Keep-Alive")
             except Exception as e:
                 print(f"خطأ في Keep-Alive: {str(e)}")
