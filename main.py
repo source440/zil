@@ -19,6 +19,16 @@ from flask import Flask, request
 import math
 import base64
 from github import Github
+import psutil
+from cachetools import TTLCache
+import asyncio
+import aiofiles
+import concurrent.futures
+import logging
+
+# تكوين السجلات
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # إعداد التوكن وإنشاء البوت وFlask app
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -39,6 +49,11 @@ pending_files = {}  # {pending_key: {'user_id': int, 'file_name': str, 'file_dat
 banned_users = set()
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 MAX_MEMORY_USAGE = 500 * 1024 * 1024  # 500MB كحد أقصى لاستخدام الذاكرة (تم زيادتها)
+
+# تحسينات الأداء
+github_cache = TTLCache(maxsize=100, ttl=300)  # كاش GitHub لمدة 5 دقائق
+thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+installed_libraries = set()  # مجموعة المكتبات المثبتة
 
 # تخزين بيانات الأدمن
 admin_users = {admin_id}  # مجموعة من آيدي الأدمن
@@ -108,21 +123,38 @@ def bot_monitor():
             time.sleep(30)
 
 def memory_cleaner():
-    """تنظيف الذاكرة التلقائي"""
+    """تنظيف الذاكرة التلقائي المحسّن"""
     while True:
         try:
+            # استخدام النظام المحسن لمراقبة الذاكرة
+            system_memory = get_system_memory_usage()
             current_usage = get_memory_usage()
-            if current_usage > MAX_MEMORY_USAGE * 0.8:  # إذا تجاوز 80%
-                # حذف أقدم ملف غير نشط
+            
+            # التحقق من استخدام الذاكرة الكلي أو الملفات المؤقتة
+            if system_memory['percent'] > 85 or current_usage > MAX_MEMORY_USAGE * 0.8:
+                logger.warning(f"استخدام الذاكرة مرتفع: {system_memory['percent']}%")
+                
+                # حذف أقدم الملفات غير النشطة
+                cleaned_files = 0
                 for user_id, files in list(user_files.items()):
                     for file_key, file_info in list(files.items()):
                         if file_info.get('process') and file_info['process'].poll() is not None:
                             delete_bot_file(user_id, file_key)
-                            print(f"تنظيف الذاكرة: حذف {file_info['file_name']}")
-                            break
+                            logger.info(f"تنظيف الذاكرة: حذف {file_info['file_name']}")
+                            cleaned_files += 1
+                            if cleaned_files >= 5:  # حذف حتى 5 ملفات في المرة الواحدة
+                                break
+                    if cleaned_files >= 5:
+                        break
+                
+                # تنظيف الكاش إذا كان ممتلئاً
+                if len(github_cache) > 50:
+                    github_cache.clear()
+                    logger.info("تم تنظيف كاش GitHub")
+                
         except Exception as e:
-            print(f"خطأ في منظف الذاكرة: {str(e)}")
-        time.sleep(60 * 30)  # كل 30 دقيقة
+            logger.error(f"خطأ في منظف الذاكرة: {str(e)}")
+        time.sleep(60 * 15)  # كل 15 دقيقة (محسن)
 
 def run_bot_process(temp_path):
     """تشغيل البوت مع تسجيل الأخطاء"""
@@ -157,7 +189,7 @@ def init_github_repo():
         return None
 
 def upload_to_github(file_name, content, user_id):
-    """رفع ملف إلى مستودع GitHub"""
+    """رفع ملف إلى مستودع GitHub مع التحسينات"""
     try:
         if not github_repo:
             init_github_repo()
@@ -175,23 +207,41 @@ def upload_to_github(file_name, content, user_id):
             branch="main"
         )
         
+        # حفظ في الكاش
+        github_cache[file_path] = content
+        logger.info(f"تم رفع الملف إلى GitHub: {file_path}")
+        
         return file_path
     except Exception as e:
-        print(f"فشل الرفع إلى GitHub: {str(e)}")
+        logger.error(f"فشل الرفع إلى GitHub: {str(e)}")
         return None
 
 def download_from_github(file_path):
-    """تنزيل ملف من مستودع GitHub"""
+    """تنزيل ملف من مستودع GitHub مع استخدام الكاش"""
     try:
+        # التحقق من الكاش أولاً
+        if file_path in github_cache:
+            logger.info(f"تم استخدام الكاش لتنزيل الملف: {file_path}")
+            cached_content = github_cache[file_path]
+            if isinstance(cached_content, str):
+                return cached_content.encode('utf-8')
+            return cached_content
+        
         if not github_repo:
             init_github_repo()
             if not github_repo:
                 return None
         
         file = github_repo.get_contents(file_path)
-        return base64.b64decode(file.content)
+        content = base64.b64decode(file.content)
+        
+        # حفظ في الكاش
+        github_cache[file_path] = content
+        logger.info(f"تم تنزيل الملف من GitHub: {file_path}")
+        
+        return content
     except Exception as e:
-        print(f"فشل التنزيل من GitHub: {str(e)}")
+        logger.error(f"فشل التنزيل من GitHub: {str(e)}")
         return None
 
 def delete_from_github(file_path):
@@ -284,7 +334,7 @@ def install_requirements(path):
         requirements_path = os.path.join(dir_path, "requirements.txt")
         
         if os.path.exists(requirements_path):
-            print(f"تم العثور على ملف المتطلبات: {requirements_path}")
+            logger.info(f"تم العثور على ملف المتطلبات: {requirements_path}")
             subprocess.call(['pip', 'install', '-r', requirements_path])
             return
         
@@ -323,17 +373,43 @@ def install_requirements(path):
             std_libs = sys.stdlib_module_names
             libraries = [lib for lib in libraries if lib not in std_libs]
             
-            print(f"المكتبات المكتشفة: {libraries}")
+            logger.info(f"المكتبات المكتشفة: {libraries}")
             
             # تثبيت المكاتب المكتشفة
             for lib in libraries:
                 try:
                     subprocess.call(['pip', 'install', lib])
+                    installed_libraries.add(lib)
                 except Exception as e:
-                    print(f"فشل تثبيت {lib}: {e}")
+                    logger.error(f"فشل تثبيت {lib}: {e}")
     
     except Exception as e:
-        print(f"فشل التثبيت التلقائي: {e}")
+        logger.error(f"فشل التثبيت التلقائي: {e}")
+
+def install_custom_library(library_name):
+    """تثبيت مكتبة مخصصة"""
+    try:
+        # التحقق من أن المكتبة ليست مثبتة مسبقاً
+        if library_name in installed_libraries:
+            return True, f"المكتبة {library_name} مثبتة مسبقاً"
+        
+        # تثبيت المكتبة
+        result = subprocess.run(['pip', 'install', library_name], 
+                              capture_output=True, text=True, timeout=60)
+        
+        if result.returncode == 0:
+            installed_libraries.add(library_name)
+            logger.info(f"تم تثبيت المكتبة بنجاح: {library_name}")
+            return True, f"✅ تم تثبيت المكتبة {library_name} بنجاح"
+        else:
+            logger.error(f"فشل تثبيت المكتبة {library_name}: {result.stderr}")
+            return False, f"❌ فشل تثبيت المكتبة {library_name}\n{result.stderr}"
+            
+    except subprocess.TimeoutExpired:
+        return False, f"❌ انتهت مهلة تثبيت المكتبة {library_name}"
+    except Exception as e:
+        logger.error(f"خطأ في تثبيت المكتبة {library_name}: {str(e)}")
+        return False, f"❌ خطأ في تثبيت المكتبة {library_name}: {str(e)}"
 
 def get_memory_usage():
     """الحصول على إجمالي استخدام الذاكرة للملفات المؤقتة فقط"""
@@ -343,6 +419,20 @@ def get_memory_usage():
             if 'temp_path' in file_info and os.path.exists(file_info['temp_path']):
                 total += os.path.getsize(file_info['temp_path'])
     return total
+
+def get_system_memory_usage():
+    """الحصول على استخدام الذاكرة الفعلي للنظام"""
+    try:
+        memory = psutil.virtual_memory()
+        return {
+            'total': memory.total,
+            'available': memory.available,
+            'percent': memory.percent,
+            'used': memory.used,
+            'free': memory.free
+        }
+    except:
+        return {'percent': 0, 'used': 0, 'free': MAX_MEMORY_USAGE}
 
 def check_memory_available(additional_size):
     """التحقق من توفر مساحة ذاكرة كافية"""
@@ -705,6 +795,7 @@ def start(message):
         types.InlineKeyboardButton("رفع .py 📤", callback_data='upload_py'),
         types.InlineKeyboardButton("رفع .zip 📤", callback_data='upload_zip'),
         types.InlineKeyboardButton("ملفاتي 📂", callback_data='my_files'),
+        types.InlineKeyboardButton("تثبيت مكتبة 📦", callback_data='install_library'),
     ]
     markup.add(*buttons)
     
@@ -751,6 +842,79 @@ python-dotenv
     markup.add(types.InlineKeyboardButton("العودة إلى الواجهة الرئيسية", callback_data='back_to_main'))
     
     bot.send_message(call.message.chat.id, help_text, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'install_library')
+def show_install_library(call):
+    """عرض واجهة تثبيت المكتبات"""
+    if call.from_user.id in banned_users:
+        bot.answer_callback_query(call.id, "❌ تم حظرك من استخدام البوت.")
+        return
+    
+    install_text = """
+📦 *تثبيت مكتبة Python*
+
+قم بإرسال اسم المكتبة التي تريد تثبيتها مثل:
+• requests
+• telebot
+• flask
+• numpy
+• pandas
+
+📋 المكتبات المثبتة حالياً:
+"""
+    
+    if installed_libraries:
+        install_text += "\n".join([f"✅ {lib}" for lib in sorted(installed_libraries)])
+    else:
+        install_text += "لا توجد مكتبات مثبتة حالياً"
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("العودة إلى الواجهة الرئيسية", callback_data='back_to_main'))
+    
+    msg = bot.send_message(call.message.chat.id, install_text, parse_mode="Markdown", reply_markup=markup)
+    bot.register_next_step_handler(msg, process_install_library)
+
+def process_install_library(message):
+    """معالجة طلب تثبيت مكتبة"""
+    if message.from_user.id in banned_users:
+        bot.reply_to(message, "❌ تم حظرك من استخدام البوت.")
+        return
+    
+    library_name = message.text.strip()
+    
+    # التحقق من صحة اسم المكتبة
+    if not library_name or not re.match(r'^[a-zA-Z0-9_-]+$', library_name):
+        bot.reply_to(message, "❌ اسم المكتبة غير صالح. يجب أن يحتوي على أحرف وأرقام فقط.")
+        return
+    
+    # إرسال رسالة تحميل
+    progress_msg = bot.send_message(message.chat.id, "⏳ جاري تثبيت المكتبة...")
+    
+    # تثبيت المكتبة في خيط منفصل
+    def install_thread():
+        success, result_msg = install_custom_library(library_name)
+        
+        # إنشاء أزرار للعودة
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("تثبيت مكتبة أخرى 📦", callback_data='install_library'))
+        markup.add(types.InlineKeyboardButton("العودة إلى الواجهة الرئيسية", callback_data='back_to_main'))
+        
+        try:
+            bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=progress_msg.message_id,
+                text=result_msg,
+                reply_markup=markup
+            )
+        except:
+            bot.send_message(message.chat.id, result_msg, reply_markup=markup)
+        
+        # تسجيل النشاط
+        log_activity(message.from_user.id, "تثبيت مكتبة", f"المكتبة: {library_name}, النتيجة: {'نجح' if success else 'فشل'}")
+    
+    # بدء التثبيت في خيط منفصل
+    thread = threading.Thread(target=install_thread)
+    thread.start()
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):

@@ -1,4 +1,64 @@
-Flask
-pyTelegramBotAPI
-requests
-PyGithub
+# Bot Framework
+pyTelegramBotAPI==4.14.0
+
+# HTTP Requests and Web
+requests==2.31.0
+aiohttp==3.9.1
+aiofiles==23.2.1
+
+# System Monitoring and Process Management
+psutil==5.9.6
+
+# File Processing and Encoding
+chardet==5.2.0
+
+# Caching
+cachetools==5.3.2
+
+# Security and File Analysis
+python-magic==0.4.27
+
+# Environment Variables Support
+python-dotenv==1.0.0
+
+# Enhanced Logging
+colorlog==6.8.0
+
+# Performance Monitoring
+memory-profiler==0.61.0
+
+# JSON Handling (faster than standard json)
+ujson==5.8.0
+
+# Time and Date Utilities
+python-dateutil==2.8.2
+
+# File Locking for Thread Safety
+filelock==3.13.1
+
+# Archive Handling
+py7zr==0.20.8
+
+# Database Support (SQLite utilities)
+sqlite-utils==3.35.2
+
+# Regular Expressions (enhanced)
+regex==2023.10.3
+
+# Async Support
+asyncio-throttle==1.0.2
+
+# Web Server (for health checks)
+gunicorn==21.2.0
+
+# Development and Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+
+# Code Quality
+flake8==6.1.0
+black==23.11.0
+
+# Type Checking
+mypy==1.7.1
+types-requests==2.31.0.10
