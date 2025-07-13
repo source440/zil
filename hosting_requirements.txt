@@ -1,0 +1,70 @@
+# Telegram Bot Framework
+pyTelegramBotAPI==4.14.0
+
+# System Monitoring
+psutil==5.9.6
+
+# Task Scheduling
+schedule==1.2.0
+
+# HTTP Requests
+requests==2.31.0
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Process Management (for older Python versions)
+subprocess32==3.5.4; python_version < '3.0'
+
+# Threading and Concurrency (for older Python versions)
+futures==3.1.1; python_version < '3.2'
+
+# Type Hints Support (for older Python versions)
+typing==3.7.4.3; python_version < '3.5'
+
+# Data Classes Support (for older Python versions)
+dataclasses==0.8; python_version < '3.7'
+
+# Enum Support (for older Python versions)
+enum34==1.1.10; python_version < '3.4'
+
+# Date and Time Utilities
+python-dateutil==2.8.2
+
+# JSON Handling (faster than standard json)
+ujson==5.8.0
+
+# Logging Enhanced
+colorlog==6.8.0
+
+# File Operations (for older Python versions)
+pathlib2==2.3.7; python_version < '3.4'
+
+# Web Server (for health checks and webhooks)
+gunicorn==21.2.0
+
+# Development and Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# Code Quality
+black==23.11.0
+flake8==6.1.0
+
+# Documentation
+sphinx==7.2.6
+
+# Security
+cryptography==41.0.7
+
+# Configuration Management
+pyyaml==6.0.1
+
+# File Monitoring
+watchdog==3.0.0
+
+# Network Tools
+netifaces==0.11.0
+
+# Templating (for generating configs)
+jinja2==3.1.2

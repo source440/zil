@@ -1,0 +1,117 @@
+# ======= Bot Configuration ======= #
+# Telegram Bot Token (من @BotFather)
+BOT_TOKEN=YOUR_BOT_TOKEN_HERE
+
+# Admin User IDs (مفصولة بفواصل)
+ADMIN_IDS=123456789,987654321
+
+# Payment Provider Token (للمدفوعات)
+PAYMENT_TOKEN=YOUR_PAYMENT_TOKEN
+
+# Webhook URL (اختياري)
+WEBHOOK_URL=https://yourdomain.com/webhook
+
+# ======= Database Configuration ======= #
+# مسار قاعدة البيانات
+DATABASE_PATH=hosting_bot.db
+
+# ======= Hosting Configuration ======= #
+# مجلد جذر الاستضافة
+HOSTING_ROOT=/var/hosting
+
+# حدود المساحة (بالميجابايت)
+MAX_STORAGE_FREE=500
+MAX_STORAGE_PREMIUM=5000
+
+# حدود عرض النطاق (ميجابايت/شهر)
+MAX_BANDWIDTH_FREE=1000
+MAX_BANDWIDTH_PREMIUM=50000
+
+# ======= Server Configuration ======= #
+# عنوان IP للخادم
+SERVER_IP=127.0.0.1
+
+# نطاق المنافذ المتاحة
+PORT_RANGE_START=8000
+PORT_RANGE_END=9000
+
+# مسارات Nginx
+NGINX_CONFIG_PATH=/etc/nginx/sites-available
+NGINX_ENABLED_PATH=/etc/nginx/sites-enabled
+
+# ======= Security Configuration ======= #
+# مفتاح التشفير
+SECRET_KEY=your-secret-key-here
+
+# تفعيل SSL
+SSL_ENABLED=false
+
+# مسار شهادات SSL
+SSL_CERT_PATH=/etc/ssl/certs
+SSL_KEY_PATH=/etc/ssl/private
+
+# ======= Email Configuration ======= #
+# إعدادات البريد الإلكتروني للإشعارات
+SMTP_SERVER=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@gmail.com
+SMTP_PASSWORD=your-email-password
+SMTP_USE_TLS=true
+
+# ======= Backup Configuration ======= #
+# مسار النسخ الاحتياطية
+BACKUP_PATH=/var/backups/hosting
+
+# فترة الاحتفاظ بالنسخ الاحتياطية (أيام)
+BACKUP_RETENTION_DAYS=30
+
+# ======= Monitoring Configuration ======= #
+# فترة مراقبة النظام (ثواني)
+MONITOR_INTERVAL=60
+
+# حدود تنبيهات الموارد
+CPU_ALERT_THRESHOLD=80
+MEMORY_ALERT_THRESHOLD=85
+DISK_ALERT_THRESHOLD=90
+
+# ======= Logging Configuration ======= #
+# مستوى التسجيل
+LOG_LEVEL=INFO
+
+# مسار ملف السجل
+LOG_FILE=hosting_bot.log
+
+# حجم ملف السجل الأقصى (ميجابايت)
+LOG_MAX_SIZE=50
+
+# عدد ملفات السجل للاحتفاظ بها
+LOG_BACKUP_COUNT=5
+
+# ======= External Services ======= #
+# مفتاح API للخدمات الخارجية
+CLOUDFLARE_API_TOKEN=your-cloudflare-token
+DOMAIN_REGISTRAR_API_KEY=your-domain-api-key
+
+# ======= Performance Configuration ======= #
+# عدد العمال للمعالجة المتوازية
+MAX_WORKERS=10
+
+# حجم الذاكرة المؤقتة
+CACHE_SIZE=100
+
+# مدة انتهاء صلاحية الذاكرة المؤقتة (ثواني)
+CACHE_TTL=300
+
+# ======= Development Configuration ======= #
+# وضع التطوير
+DEBUG=false
+
+# اختبار المدفوعات
+TEST_PAYMENTS=false
+
+# ======= Docker Configuration ======= #
+# إعدادات Docker (إذا كانت متاحة)
+DOCKER_ENABLED=false
+DOCKER_REGISTRY=your-registry.com
+DOCKER_USERNAME=your-docker-username
+DOCKER_PASSWORD=your-docker-password
